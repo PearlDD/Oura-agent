@@ -44,6 +44,15 @@ async function refreshReport() {
   $('observations').replaceChildren(...r.observations.map(n=>text('li',n)));
   $('focus').textContent=r.focus;
   $('limits').textContent=r.limits;
+  $('report-mode').textContent=r.day_context.label;
+  $('plan-context').textContent=r.day_context.reason;
+  $('training-heading').textContent=r.day_context.mode==='training'?'训练表现回顾':'最近训练回顾';
+  $('recovery-trends').replaceChildren();
+  for(const [key,label,unit] of [['sleep_hours','主睡眠','小时'],['hrv','HRV','ms'],['rhr','夜间最低心率','bpm']]){
+    const {recent,previous}=r.trends[key];
+    const detail=recent.value==null||previous.value==null?`样本不足 · 最近 ${recent.n}/3 晚，此前 ${previous.n}/3 晚`:`${fmt(previous.value,1)} → ${fmt(recent.value,1)} ${unit} · 最近 ${recent.n} 晚 / 此前 ${previous.n} 晚`;
+    const row=text('div','','trend-row');row.append(text('strong',label),text('span',detail));$('recovery-trends').append(row);
+  }
   $('last-date').textContent=r.last_date||'暂无记录';
   const container=$('training');container.replaceChildren();
   if(!r.last_sessions.length)container.append(text('div','同步训记后，这里会显示最近一次训练的动作、正式组和 RPE。','empty'));
@@ -68,6 +77,7 @@ async function refreshReport() {
   if(!r.comparisons.length)$('comparisons').append(text('p','需要至少两次包含相同动作的训练记录。'));
   if(loadedDate!==d||!dirtyCheckin){
     $('energy').value=r.checkin.energy??3;$('soreness').value=r.checkin.soreness??0;$('note').value=r.checkin.note??'';
+    $('daily-plan').value=r.day_context.plan;
     updateRanges();dirtyCheckin=false;
   }
   loadedDate=d;
@@ -94,7 +104,8 @@ $('sync').onclick=async()=>{try{$('sync').disabled=true;await api('/api/sync',{d
 $('report-date').onchange=()=>{dirtyCheckin=false;refreshReport().catch(e=>status(e.message,true));};
 for(const key of ['energy','soreness'])$(key).oninput=()=>{dirtyCheckin=true;updateRanges();};
 $('note').oninput=()=>{dirtyCheckin=true;};
-$('checkin-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/checkin',{date:selected(),energy:Number($('energy').value),soreness:Number($('soreness').value),note:$('note').value});dirtyCheckin=false;status('今日感受已保存。');}catch(e){status(e.message,true);}};
+$('daily-plan').onchange=()=>{dirtyCheckin=true;};
+$('checkin-form').onsubmit=async e=>{e.preventDefault();const d=selected();try{await api('/api/checkin',{date:d,energy:Number($('energy').value),soreness:Number($('soreness').value),note:$('note').value,plan:$('daily-plan').value});if(d===selected()){dirtyCheckin=false;await refreshReport();}status('当日计划与感受已保存，日报已更新。');}catch(e){status(e.message,true);}};
 $('ai-generate').onclick=async()=>{
   if(!state.ai){$('settings-dialog').showModal();$('settings-status').textContent='请先填写 OpenAI API Key 和模型 ID。';return;}
   if(!$('ai-consent').checked){status('请先勾选 AI 摘要发送授权。',true);return;}

@@ -327,6 +327,56 @@ def exercise_comparisons(sessions, last_date, last_sessions):
     return comparisons
 
 
+def day_context(d, sessions, fetched, check):
+    plan = check.get('plan', 'undecided')
+    recorded = any(t['date'] == d for t in sessions)
+    synced = d in fetched
+    mode = 'training' if recorded or plan == 'train' else 'recovery' if synced or plan == 'rest' else 'unknown'
+    labels = {'training': '训练日', 'recovery': '休息／停练观察', 'unknown': '数据待补齐'}
+    if recorded:
+        reason = '本日已有训练记录，以记录回顾动作表现与训练量。'
+        if plan == 'rest':
+            reason += '你选择了休息，但本日有训练记录，请核对计划与实际安排。'
+    elif plan == 'train':
+        reason = '你计划训练；本日尚无训练记录，计划不代表已经完成训练。'
+    elif plan == 'rest':
+        reason = '你计划休息，重点回顾睡眠与恢复趋势。'
+    elif synced:
+        reason = '本日已读取，暂无训练记录；今日计划未决定，先查看恢复趋势。'
+    else:
+        reason = '本日训练数据未读取，不能据此判断是否休息。'
+    return {'mode': mode, 'label': labels[mode], 'plan': plan, 'has_record': recorded,
+            'synced': synced, 'reason': reason}
+
+
+def recovery_trends(recovery, date):
+    result = {}
+    for key in ('sleep_hours', 'hrv', 'rhr'):
+        windows = []
+        for start, end in ((6, 0), (13, 7)):
+            low, high = (date - dt.timedelta(days=start)).isoformat(), (date - dt.timedelta(days=end)).isoformat()
+            vals = [v[key] for d, v in recovery.items() if low <= d <= high and v.get(key) is not None]
+            windows.append({'n': len(vals), 'value': round(statistics.median(vals), 2) if len(vals) >= 3 else None})
+        result[key] = {'recent': windows[0], 'previous': windows[1]}
+    return result
+
+
+def save_checkin(body):
+    d = day(body.get('date'))
+    energy, soreness = int(body.get('energy')), int(body.get('soreness'))
+    if not (1 <= energy <= 5 and 0 <= soreness <= 5):
+        raise AppError('评分超出范围。')
+    plan = body.get('plan', 'undecided')
+    if plan not in ('train', 'rest', 'undecided'):
+        raise AppError('今日计划无效。')
+    with LOCK:
+        checks = load(DATA / 'checkins.json')
+        # Preserve any existing diary fields as the format evolves.
+        checks[d] = {**checks.get(d, {}), 'energy': energy, 'soreness': soreness,
+                     'note': str(body.get('note', ''))[:1000], 'plan': plan}
+        save(DATA / 'checkins.json', checks)
+
+
 def report(d):
     date = dt.date.fromisoformat(d)
     sessions, fetched = training_data()
@@ -371,12 +421,24 @@ def report(d):
             notes.append('部分训记记录被接口截断，组数统计可能不完整。')
             break
     check = load(DATA / 'checkins.json').get(d, {})
-    focus = '记录今天的精神、酸痛程度，以及第一组的实际表现，作为下次比较的依据。'
+    context = day_context(d, sessions, fetched, check)
+    notes.insert(0, context['reason'])
+    gap = (date - dt.date.fromisoformat(last_date)).days if last_date else None
+    if gap is not None and gap > 0:
+        notes.append(f'距最近一次训练记录 {gap} 天；间隔天数不代表已经充分恢复。')
+    if context['mode'] == 'training':
+        focus = '结合今日计划，记录精神、酸痛与第一组的实际表现；训练后核对本次与上次同动作的差异。'
+    elif context['mode'] == 'recovery':
+        focus = '记录今天的精神与酸痛，观察睡眠、HRV 和夜间心率的连续变化；准备回归训练时，再结合你的计划与实际感受。'
+    else:
+        focus = '先补齐本日训练数据或选择今日计划，再结合主观感受回顾恢复趋势。'
     if not settings().get('oura_tokens'):
         focus = '先连接 Oura 并同步数据，建立训练与睡眠恢复的共同记录。'
     result = {'date': d, 'generated_at': dt.datetime.now(TZ).isoformat(), 'timezone': str(TZ),
               'week': week, 'coverage': coverage, 'recovery': current, 'baseline': baselines,
               'last_date': last_date, 'last_sessions': last_sessions, 'checkin': check,
+              'day_context': context, 'days_since_training': gap,
+              'trends': recovery_trends(recovery, date),
               'comparisons': exercise_comparisons(sessions, last_date, last_sessions),
               'observations': notes, 'focus': focus,
               'limits': '基线使用所选日期之前 28 天的中位数，至少需 7 个有效夜晚。正式组只计已完成且非热身组；递减组子组单独计数。负重总量仅供日志核对，不代表肌肉刺激或不同动作间的可比训练负荷。恢复指标不能判断某块肌肉是否恢复，也不会自动修改训练计划。'}
@@ -384,10 +446,19 @@ def report(d):
 
 
 def markdown(r):
-    lines = [f'# 训练与恢复日报 · {r["date"]}', '', f'生成时间：{r["generated_at"]}', '', '## 观察', '']
+    plans = {'train': '训练', 'rest': '休息', 'undecided': '未决定'}
+    lines = [f'# 训练与恢复日报 · {r["date"]}', '', f'生成时间：{r["generated_at"]}',
+             f'日报模式：{r["day_context"]["label"]}；当日计划：{plans[r["day_context"]["plan"]]}', '', '## 观察', '']
     lines.extend('- ' + n for n in r['observations'])
     lines += ['', '## 近 7 天训练', '', f'训练记录 {r["week"]["sessions"]} 次；正式组 {r["week"]["sets"]} 组；成功读取 {r["coverage"]}/7 天。',
               '', '## 今日关注', '', r['focus'], '', '## 数据口径', '', r['limits']]
+    lines += ['', '## 恢复趋势', '', '最近 7 天与此前 7 天分别取中位数，每段至少需 3 个有效夜晚。', '']
+    for key, label, unit in (('sleep_hours', '主睡眠', '小时'), ('hrv', 'HRV', 'ms'), ('rhr', '夜间最低心率', 'bpm')):
+        recent, previous = r['trends'][key]['recent'], r['trends'][key]['previous']
+        if recent['value'] is not None and previous['value'] is not None:
+            lines.append(f'- {label}：{previous["value"]:g} → {recent["value"]:g} {unit}（此前 {previous["n"]} 晚，最近 {recent["n"]} 晚）。')
+        else:
+            lines.append(f'- {label}：样本不足（最近 {recent["n"]} 晚，此前 {previous["n"]} 晚）。')
     if r['checkin']:
         lines += ['', '## 主观记录', '', f'精神：{r["checkin"].get("energy", "未填")} / 5；酸痛：{r["checkin"].get("soreness", "未填")} / 5。', r['checkin'].get('note', '')]
     if r['comparisons']:
@@ -530,14 +601,7 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=sync, args=(count, True), daemon=True).start()
                 self.reply({'ok': True})
             elif p == '/api/checkin':
-                d = day(body.get('date'))
-                energy, soreness = int(body.get('energy')), int(body.get('soreness'))
-                if not (1 <= energy <= 5 and 0 <= soreness <= 5):
-                    raise AppError('评分超出范围。')
-                with LOCK:
-                    checks = load(DATA / 'checkins.json')
-                    checks[d] = {'energy': energy, 'soreness': soreness, 'note': str(body.get('note', ''))[:1000]}
-                    save(DATA / 'checkins.json', checks)
+                save_checkin(body)
                 self.reply({'ok': True})
             elif p == '/api/oura/connect':
                 s = settings()

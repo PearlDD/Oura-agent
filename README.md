@@ -57,3 +57,7 @@ Tests use temporary directories and mocked provider responses. Real Oura authori
 ## Public site deployment
 
 GitHub Pages serves `docs/` on the `main` branch. Static public pages need no build dependencies. See `docs/privacy.html` and `docs/terms.html` for current data practices and use terms.
+
+## 训练日与恢复观察模式
+
+可按日期保存「训练／休息／未决定」计划。计划不视为已完成训练；本日有记录时保留实际训练回顾，未同步日期不会被当作休息日。休息或停练观察侧重恢复趋势和最近训练回顾，不凭间隔天数判断充分恢复。趋势分别取最近 7 晚与此前 7 晚的中位数，每段至少需 3 个有效夜晚。日报导出和可选 AI 摘要包含当日计划与模式；更改计划后需手动重新生成已缓存的 AI 日报。

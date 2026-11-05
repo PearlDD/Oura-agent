@@ -3,3 +3,5 @@
 @media(max-width:550px){.intro{flex-direction:column;align-items:stretch;gap:24px}.date-block{text-align:left;border-top:1px solid var(--line);padding-top:20px}.date-block input{width:100%;max-width:260px}.date-block label{margin-bottom:4px}.date-block p{display:inline-block;margin-right:16px}h1{font-size:44px}}
 
 .comparison{border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:var(--green)}.comparison summary{cursor:pointer}.comparison p{white-space:pre-line;font-size:11px;line-height:1.9;color:var(--muted);border-top:1px solid #eceee5;padding-top:10px}
+
+.checkin select{width:100%;padding:12px;border:1px solid var(--line);border-radius:5px;background:#fafbf6;color:var(--ink)}#training-heading{font:inherit;color:inherit;margin:0}.trend-row{display:flex;justify-content:space-between;gap:15px;padding:12px 0;border-bottom:1px solid #eceee5;font-size:12px}.trend-row strong{font-weight:500;white-space:nowrap}.trend-row span{text-align:right;color:var(--muted);font-size:11px;line-height:1.8}

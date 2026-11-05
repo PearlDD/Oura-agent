@@ -73,6 +73,54 @@ class AppTests(unittest.TestCase):
         self.assertTrue(any('未读取日期不能视为休息日' in x for x in r['observations']))
         self.assertIsNone(r['recovery'].get('hrv'))
 
+    def test_day_modes_distinguish_plan_record_and_missing_sync(self):
+        d = '2026-11-05'
+        self.assertEqual(app.day_context(d, [], [], {})['mode'], 'unknown')
+        self.assertEqual(app.day_context(d, [], [d], {})['mode'], 'recovery')
+        planned = app.day_context(d, [], [], {'plan': 'train'})
+        self.assertEqual(planned['mode'], 'training')
+        self.assertFalse(planned['has_record'])
+        self.assertIn('不代表已经完成', planned['reason'])
+        self.assertEqual(app.day_context(d, [], [], {'plan': 'rest'})['mode'], 'recovery')
+        actual = app.day_context(d, [{'date': d}], [d], {'plan': 'rest'})
+        self.assertEqual(actual['mode'], 'training')
+        self.assertIn('核对', actual['reason'])
+
+    def test_checkin_plan_is_persisted_per_date_without_erasing_old_fields(self):
+        app.save(app.DATA/'checkins.json', {'2026-11-04': {'note': 'yesterday'},
+                                          '2026-11-05': {'legacy': 'keep'}})
+        app.save_checkin({'date': '2026-11-05', 'energy': 4, 'soreness': 1, 'plan': 'rest', 'note': 'today'})
+        stored = app.load(app.DATA/'checkins.json')
+        self.assertEqual(stored['2026-11-04']['note'], 'yesterday')
+        self.assertEqual(stored['2026-11-05']['plan'], 'rest')
+        self.assertEqual(stored['2026-11-05']['legacy'], 'keep')
+        with self.assertRaises(app.AppError):
+            app.save_checkin({'date': '2026-11-05', 'energy': 3, 'soreness': 0, 'plan': 'invalid'})
+        self.assertEqual(app.load(app.DATA/'checkins.json')['2026-11-05']['plan'], 'rest')
+
+    def test_recovery_trends_have_separate_windows_and_ignore_future(self):
+        anchor = dt.date(2026, 11, 5)
+        data = {(anchor-dt.timedelta(days=i)).isoformat(): {'hrv': 40 if i<7 else 60} for i in range(14)}
+        data['2026-11-06'] = {'hrv': 999}
+        trend = app.recovery_trends(data, anchor)['hrv']
+        self.assertEqual(trend['recent'], {'n': 7, 'value': 40})
+        self.assertEqual(trend['previous'], {'n': 7, 'value': 60})
+        del data['2026-11-05'];del data['2026-11-04'];del data['2026-11-03']
+        del data['2026-11-02'];del data['2026-11-01']
+        self.assertIsNone(app.recovery_trends(data, anchor)['hrv']['recent']['value'])
+
+    def test_recovery_report_and_export_respect_plan_without_claiming_full_recovery(self):
+        app.save(app.DATA/'xunji/2026-11-05.json', {'data': {'res': {'trains': []}}})
+        app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'total_sleep_duration': 28800}]})
+        app.update_settings({'oura_tokens': {'access_token': 'test'}})
+        app.save_checkin({'date': '2026-11-05', 'energy': 3, 'soreness': 0, 'plan': 'rest'})
+        r = app.report('2026-11-05')
+        self.assertEqual(r['day_context']['mode'], 'recovery')
+        self.assertIn('连续变化', r['focus'])
+        self.assertIn('当日计划：休息', app.markdown(r))
+        app.save_checkin({'date': '2026-11-05', 'energy': 3, 'soreness': 0, 'plan': 'train'})
+        self.assertEqual(app.report('2026-11-05')['day_context']['mode'], 'training')
+
     def test_empty_records_cache_and_no_duplicate_requests(self):
         app.update_settings({'xunji_key': 'test-not-a-real-key'})
         with patch.object(app, 'request_json', return_value={'res': {'trains': []}}) as req:
