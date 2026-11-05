@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const csrf = document.querySelector('meta[name="iron-token"]').content;
-let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscleData;
+let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscleData, coachData, feedbackDirty=false;
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Iron-Token':csrf},body:JSON.stringify(body)});
   const data = await res.json();
@@ -46,6 +46,7 @@ async function refreshReport() {
   $('limits').textContent=r.limits;
   muscleData=r.muscle_load;
   renderMuscles(muscleData);
+  coachData=r.coach_agent;renderCoach(coachData,d);
   $('report-mode').textContent=r.day_context.label;
   $('plan-context').textContent=r.day_context.reason;
   $('training-heading').textContent=r.day_context.mode==='training'?'训练表现回顾':'最近训练回顾';
@@ -90,6 +91,62 @@ async function refreshReport() {
   $('ai-result').textContent=ai.text||'';
   $('ai-meta').textContent=ai.generated_at?`已保存的解读 · ${ai.model} · ${new Date(ai.generated_at*1000).toLocaleString('zh-CN')}（同步后可重新生成）`:'';
 }
+function renderCoach(c,d){
+  $('coach-profile-state').textContent=c.profile.confirmed?'偏好已确认':'偏好待确认';
+  const labels={draft:'草案',accepted:'已接受',completed:'已手动标记完成',skipped:'已跳过'};
+  const box=$('coach-plans');box.replaceChildren();
+  const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
+  for(const p of upcoming){
+    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · 版本 ${p.version}`));
+    const list=text('ul','');for(const e of p.exercises){list.append(text('li',`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}card.append(list);for(const e of p.exercises)if(e.adaptation)card.append(text('small',e.name+'：'+e.adaptation));
+    const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));card.append(why);
+    if(p.tracking)card.append(text('p',p.tracking.message));
+    if(p.revision_proposal){const rev=text('div','','plan-revision');rev.append(text('strong','有新的修订草案，当前计划保留'));for(const e of p.revision_proposal.exercises)rev.append(text('p',`${e.name}：${e.sets} × ${e.reps}，预留 ${e.target_rir} 次`));for(const r of p.revision_proposal.reasons)rev.append(text('small',r));card.append(rev);}
+    const actions=text('div','','plan-actions');
+    for(const [action,label] of [['accepted','接受计划'],['completed','标记已完成'],['skipped','跳过'],['accept_revision','接受修订']]){
+      if(action==='accepted'&&(p.status!=='draft'||p.kind==='review'))continue;
+      if(action==='completed'&&(p.date>state.today||p.kind!=='train'||p.status==='completed'))continue;
+      if(action==='accept_revision'&&(!p.revision_proposal||p.revision_proposal.kind==='review'))continue;
+      if(action==='skipped'&&p.status==='skipped')continue;
+      const b=text('button',label,'ghost');b.type='button';b.onclick=async()=>{try{await api('/api/coach',{action:'plan_status',date:p.date,version:p.version,status:action});await refreshReport();status('计划状态已保存。');}catch(e){status(e.message,true);}};actions.append(b);
+    }
+    card.append(actions);box.append(card);
+  }
+  if(!upcoming.length)box.append(text('div','点击「更新计划与跟进」生成未来 7 天草案，再确认训练偏好。','empty'));
+  $('coach-calibration').replaceChildren();
+  const calibration=Object.values(c.calibration_status).filter(m=>m.samples);
+  for(const m of calibration)$('coach-calibration').append(text('p',`${m.name}：${m.samples} 天反馈 / ${m.episodes} 次相关训练 / RPE 覆盖 ${fmt(m.rpe_coverage*100)}%。${m.reason}${m.baseline_mae==null?'':` 留出 MAE ${m.baseline_mae} → ${m.candidate_mae}。`}${m.status==='accepted'?' 参数将于 '+m.effective_from+' 生效。':''}`,'calibration-row'));
+  if(!calibration.length)$('coach-calibration').append(text('p','尚无局部疲劳反馈，当前保留初始模型；新版本会持续收集反馈后验证是否更新。'));
+  $('coach-followup').replaceChildren();
+  for(const p of Object.values(c.plans).filter(p=>p.date<d&&p.kind==='train').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,4))$('coach-followup').append(text('p',`${p.date} · ${labels[p.status]} · ${p.tracking?.message||'待同步核对'} · ${(c.feedback_dates||[]).includes(p.date)?'反馈已记录':'实际完成后请补当日反馈。'}`));
+  $('coach-events').replaceChildren(...c.events.slice(-5).map(e=>text('p',`${e.date} · ${e.message}`)));
+  if(loadedDate!==d||!feedbackDirty){fillFeedback(c);feedbackDirty=false;}
+}
+function fillFeedback(c){
+  const record=c.feedback_day.find(f=>f.phase===$('feedback-phase').value)||{};
+  const box=$('feedback-fatigue');box.replaceChildren();
+  for(const [key,label] of Object.entries(muscleData.groups)){
+    const row=text('div','','soreness-row'),sel=text('select','');sel.id='fatigue-'+key;sel.dataset.muscle=key;
+    sel.append(option('','未填'),...Array.from({length:6},(_,i)=>option(String(i),String(i))));sel.value=record.fatigue?.[key]??'';sel.onchange=()=>{feedbackDirty=true;};
+    const lab=text('label',label+'疲劳');lab.htmlFor=sel.id;row.append(lab,sel);box.append(row);
+  }
+  $('feedback-performance').value=record.performance||'unknown';$('feedback-discomfort').checked=record.discomfort||false;
+}
+$('feedback-phase').onchange=()=>{fillFeedback(coachData);feedbackDirty=false;};
+$('feedback-performance').onchange=$('feedback-discomfort').onchange=()=>{feedbackDirty=true;};
+$('feedback-form').onsubmit=async e=>{e.preventDefault();try{const fatigue={};for(const sel of $('feedback-fatigue').querySelectorAll('select'))if(sel.value!=='')fatigue[sel.dataset.muscle]=Number(sel.value);
+  await api('/api/coach',{action:'feedback',date:selected(),phase:$('feedback-phase').value,fatigue,performance:$('feedback-performance').value,discomfort:$('feedback-discomfort').checked});feedbackDirty=false;await refreshReport();status('反馈已保存，校准与计划已重新评估。');
+}catch(e){status(e.message,true);}};
+$('coach-run').onclick=async()=>{const b=$('coach-run');b.disabled=true;try{await api('/api/coach',{action:'run'});await refreshReport();status('已更新校准、计划草案与执行跟进。');}catch(e){status(e.message,true);}finally{b.disabled=false;}};
+$('coach-profile-open').onclick=()=>{
+  const p=coachData.profile;$('coach-goal').value=p.goal;$('coach-minutes').value=p.minutes;$('coach-exercises').value=p.excluded_exercises.join('\n');
+  for(const [id,entries,chosen] of [['coach-weekdays',['周一','周二','周三','周四','周五','周六','周日'].map((n,i)=>[String(i),n]),p.weekdays.map(String)],['coach-exclusions',Object.entries(muscleData.groups),p.excluded_muscles]]){
+    const box=$(id);box.replaceChildren();for(const [key,label] of entries){const lab=text('label','','choice'),input=document.createElement('input');input.type='checkbox';input.value=key;input.checked=chosen.includes(key);lab.append(input,document.createTextNode(label));box.append(lab);}
+  }
+  $('coach-profile-message').textContent='';$('coach-profile-dialog').showModal();
+};
+$('coach-profile-close').onclick=()=>$('coach-profile-dialog').close();
+$('coach-profile-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/coach',{action:'profile',profile:{goal:$('coach-goal').value,minutes:Number($('coach-minutes').value),weekdays:[...$('coach-weekdays').querySelectorAll('input:checked')].map(e=>Number(e.value)),excluded_muscles:[...$('coach-exclusions').querySelectorAll('input:checked')].map(e=>e.value),excluded_exercises:$('coach-exercises').value.split('\n').map(s=>s.trim()).filter(Boolean)}});await refreshReport();$('coach-profile-dialog').close();status('训练偏好已保存，未来草案已更新。');}catch(e){$('coach-profile-message').textContent=e.message;}};
 function updateRanges(){for(const key of ['energy','soreness'])$(key+'-value').textContent=$(key).value+' / 5';}
 function option(value,label){const o=text('option',label);o.value=value;return o;}
 function renderMuscles(m){
@@ -97,10 +154,10 @@ function renderMuscles(m){
   const body=$('muscle-rows');body.replaceChildren();
   for(const row of m.muscles){
     const el=text('tr','');
-    const values=[row.name,fmt(row.direct_sets,1),fmt(row.indirect_sets,1),`${fmt(row.previous_sets,1)} → ${fmt(row.week_sets,1)}${row.week_change==null?'（读取未齐）':''}`,row.usual_week==null?'样本不足':`${fmt(row.usual_week,1)}（${row.reference_weeks}周）`,`${fmt(row.residual_low,2)}–${fmt(row.residual_high,2)}`,row.last_trained||'暂无',row.soreness==null?'未填':String(row.soreness)];
+    const values=[row.name,fmt(row.direct_sets,1),fmt(row.indirect_sets,1),`${fmt(row.previous_sets,1)} → ${fmt(row.week_sets,1)}${row.week_change==null?'（读取未齐）':''}`,row.usual_week==null?'样本不足':`${fmt(row.usual_week,1)}（${row.reference_weeks}周）`,`${fmt(row.residual_low,2)}–${fmt(row.residual_high,2)}`,row.last_trained||'暂无',row.soreness==null?'未填':String(row.soreness),row.personalized?`拟合 ${row.half_life_days}天 / 预期疲劳 ${fmt(row.fatigue_estimate,1)}`:`初始 ${row.half_life_days}天`];
     for(const v of values)el.append(text('td',v));body.append(el);
   }
-  if(!m.muscles.length){const row=text('tr',''),cell=text('td','暂无已归类的力量组；先同步记录或校准动作归属。');cell.colSpan=8;row.append(cell);body.append(row);}
+  if(!m.muscles.length){const row=text('tr',''),cell=text('td','暂无已归类的力量组；先同步记录或校准动作归属。');cell.colSpan=9;row.append(cell);body.append(row);}
   $('muscle-alerts').replaceChildren(...m.alerts.map(a=>text('li',a)));
   $('muscle-focus').textContent=m.focus;
   $('muscle-method').textContent=m.method;

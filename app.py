@@ -19,6 +19,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo
 import muscles
+import coach
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
@@ -202,6 +203,10 @@ def sync(days=7, claimed=False):
         JOB['errors'].append('同步意外中断，请重试。')
     finally:
         JOB['running'] = False
+        try:
+            run_coach()
+        except Exception:
+            JOB['errors'].append('数据同步已结束，但教练评估更新失败，请在面板重试。')
         save(DATA / 'last-sync.json', {**JOB, 'at': dt.datetime.now(TZ).isoformat()})
 
 
@@ -409,6 +414,70 @@ def save_muscle_config(body):
         save(DATA / 'muscles.json', config)
 
 
+def run_coach(d=None):
+    d = day(d or today().isoformat())
+    with LOCK:
+        sessions, fetched = training_data()
+        state = coach.run(d, sessions, fetched, load(DATA/'muscles.json'),
+                          load(DATA/'coach-profile.json'), load(DATA/'feedback.json', []),
+                          load(DATA/'checkins.json'), load(DATA/'coach-state.json'))
+        save(DATA/'coach-state.json', state)
+        return state
+
+
+def coach_view(d):
+    state = load(DATA/'coach-state.json')
+    limit = (dt.date.fromisoformat(d)+dt.timedelta(days=6)).isoformat()
+    plans = {k:v for k,v in state.get('plans',{}).items()
+             if (dt.date.fromisoformat(d)-dt.timedelta(days=7)).isoformat()<=k<=limit
+             and v.get('revised_on',v.get('created_on',d))<=d}
+    return {'profile':coach.profile(load(DATA/'coach-profile.json')), 'plans':plans,
+            'calibration_status':state.get('calibration_status',{}) if state.get('last_run','')<=d else {},
+            'events':[e for e in state.get('events',[]) if e['date']<=d][-12:],
+            'feedback_dates':sorted({f['date'] for f in load(DATA/'feedback.json',[]) if f['date']<=d}),
+            'last_run':state.get('last_run'),
+            'feedback_day':[f for f in load(DATA/'feedback.json',[]) if f['date']==d]}
+
+
+def coach_action(body):
+    action=body.get('action')
+    with LOCK:
+        if action=='profile':
+            p=coach.profile({**body.get('profile',{}),'confirmed':True})
+            save(DATA/'coach-profile.json',p)
+        elif action=='feedback':
+            f=coach.validate_feedback(body)
+            if f['date']>today().isoformat():
+                raise AppError('不能保存未来日期的实际训练反馈。')
+            rows=load(DATA/'feedback.json',[])
+            rows=[r for r in rows if (r['date'],r['phase'])!=(f['date'],f['phase'])]+[f]
+            save(DATA/'feedback.json',rows)
+        elif action=='plan_status':
+            state=load(DATA/'coach-state.json')
+            d=day(body.get('date'))
+            p=state.get('plans',{}).get(d)
+            if not p:raise AppError('该日期还没有计划。')
+            if body.get('version')!=p['version']:raise AppError('计划已更新，请刷新后再操作。')
+            status=body.get('status')
+            if status not in ('accepted','completed','skipped','accept_revision'):
+                raise AppError('计划状态无效。')
+            if status=='completed' and d>today().isoformat():raise AppError('未来计划不能标记已完成。')
+            if status=='accept_revision':
+                if not p.get('revision_proposal'):raise AppError('暂无修订草案。')
+                if p['revision_proposal']['kind']=='review':raise AppError('修订仍待核对，暂不能接受为训练计划。')
+                p={**p['revision_proposal'],'status':'accepted','version':p['version']+1,
+                   'created_on':p.get('created_on',today().isoformat()),'revised_on':today().isoformat()}
+            else:
+                if status=='accepted' and p['kind']=='review':raise AppError('请先核对限制或动作归属，再生成可执行草案。')
+                p={**p,'status':status,'version':p['version']+1}
+            state['plans'][d]=p
+            state.setdefault('events',[]).append({'date':today().isoformat(),'type':'user','message':d+' 计划状态：'+p['status']})
+            save(DATA/'coach-state.json',state)
+        elif action!='run':
+            raise AppError('教练操作无效。')
+        run_coach()
+
+
 def report(d):
     date = dt.date.fromisoformat(d)
     sessions, fetched = training_data()
@@ -471,10 +540,12 @@ def report(d):
               'last_date': last_date, 'last_sessions': last_sessions, 'checkin': check,
               'day_context': context, 'days_since_training': gap,
               'trends': recovery_trends(recovery, date),
-              'muscle_load': muscles.model(sessions, fetched, d, load(DATA / 'muscles.json'), check.get('muscle_soreness', {})),
+              'muscle_load': muscles.model(sessions, fetched, d,
+                  coach.personalized_config(load(DATA/'muscles.json'),load(DATA/'coach-state.json').get('calibrations',[]),d), check.get('muscle_soreness', {})),
+              'coach_agent':coach_view(d),
               'comparisons': exercise_comparisons(sessions, last_date, last_sessions),
               'observations': notes, 'focus': focus,
-              'limits': '基线使用所选日期之前 28 天的中位数，至少需 7 个有效夜晚。正式组只计已完成且非热身组；递减组子组单独计数。负重总量仅供日志核对，不代表肌肉刺激或不同动作间的可比训练负荷。恢复指标不能判断某块肌肉是否恢复，也不会自动修改训练计划。'}
+              'limits': '基线使用所选日期之前 28 天的中位数，至少需 7 个有效夜晚。正式组只计已完成且非热身组；递减组子组单独计数。负重总量仅供日志核对，不代表肌肉刺激或不同动作间的可比训练负荷。恢复指标不能判断某块肌肉是否恢复。教练自动生成草案，已接受计划的变化另列修订提案。'}
     return result
 
 
@@ -500,7 +571,7 @@ def markdown(r):
             s = c['same_load']
             detail = (f'同负重 {s["weight_kg"]:g} kg 的最佳次数 {s["previous_reps"]:g} → {s["current_reps"]:g}。' if s else '无相同负重的次数可比记录。')
             lines.append(f'- {c["name"]}：对比 {c["previous_date"]}，正式组 {c["previous_sets"]} → {c["current_sets"]}；{detail}')
-    return '\n'.join(lines) + muscles.markdown(r['muscle_load'])
+    return '\n'.join(lines) + muscles.markdown(r['muscle_load']) + coach.plan_markdown(r['coach_agent'],r['date'])
 
 
 def ai_report(d):
@@ -571,10 +642,12 @@ class Handler(BaseHTTPRequestHandler):
                             'oura': bool(s.get('oura_tokens')), 'oura_configured': bool(s.get('oura_client_id') and s.get('oura_client_secret')),
                             'ai': bool(s.get('openai_key') and s.get('openai_model')), 'model': s.get('openai_model', ''),
                             'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://localhost:{PORT}/oauth/callback'})
-            elif p in ('/api/report', '/api/export', '/api/ai'):
+            elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach'):
                 d = day(params.get('date', [today().isoformat()])[0])
                 if p == '/api/report':
                     self.reply(report(d))
+                elif p == '/api/coach':
+                    self.reply(coach_view(d))
                 elif p == '/api/ai':
                     self.reply(load(DATA / 'reports' / (d + '.json'), {'text': ''}))
                 else:
@@ -636,10 +709,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply({'ok': True})
             elif p == '/api/checkin':
                 save_checkin(body)
+                run_coach()
                 self.reply({'ok': True})
             elif p == '/api/muscles':
                 save_muscle_config(body)
+                run_coach()
                 self.reply({'ok': True})
+            elif p == '/api/coach':
+                coach_action(body)
+                self.reply({'ok':True})
             elif p == '/api/oura/connect':
                 s = settings()
                 if not s.get('oura_client_id') or not s.get('oura_client_secret'):

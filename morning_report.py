@@ -13,6 +13,7 @@ def main():
     if not args.cached:
         app.sync(7)
     d = app.today().isoformat()
+    app.run_coach(d)
     result = app.report(d)
     failures = [] if args.cached else list(app.JOB.get('errors', []))
     missing = []

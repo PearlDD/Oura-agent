@@ -56,6 +56,7 @@ METHOD = ('实验性负荷模型，尚未按你的实际疲劳校准。主练肌
           '辅助／控制、拉伸不计力量组当量，未知动作单列。RPE 系数 = RPE/10；缺失时用 0.6–1.0 假设区间（不是统计置信区间）。'
           '残余负荷 = 过去 28 天各组当量 × RPE 系数 × 2^(-距记录日期天数/半衰期)。'
           '默认半衰期 2 天，可选 1–4 天；是软件假设，不是肌肉生理恢复时间。按日期估算，不使用小时精度。'
+          '符合反馈样本与留出验证门槛后，可启用每肌群拟合的半衰期，并预测主观疲劳 0–5；未启用时仍为初始假设。'
           '历史周量参考使用此前 3 个七天窗口中至少 2 个完整读取窗口的中位数，不是训练目标。低残余负荷不代表已经恢复；未同步日期、动作误分类及窗口前的训练会影响结果。'
           '单侧动作沿用日志组数，不自动除以二或翻倍；递减组子组沿用单独计数。'
           '周量比较不代表推荐目标；不以组数推断肌肉增长，也不根据 Oura 数值计算局部肌肉疲劳。')
@@ -115,8 +116,9 @@ def model(sessions, fetched, d, config=None, soreness=None):
                 counts['with_rpe'] += rpe is not None
                 low = rpe/10 if rpe is not None else .6
                 high = rpe/10 if rpe is not None else 1.
-                decay = math.pow(2, -age/half_life)
                 for muscle, weight in mapped['weights'].items():
+                    local_half_life=config.get('half_life_by_muscle',{}).get(muscle,half_life)
+                    decay = math.pow(2, -age/local_half_life)
                     row = rows[muscle]
                     by_day[muscle] += weight
                     if age < 7:
@@ -130,6 +132,10 @@ def model(sessions, fetched, d, config=None, soreness=None):
     fetched = set(fetched)
     coverage = [sum((date-dt.timedelta(days=i)).isoformat() in fetched for i in range(start, start+7)) for start in (0, 7, 14, 21)]
     for muscle, row in rows.items():
+        learned=config.get('calibration_by_muscle',{}).get(muscle)
+        row['half_life_days']=config.get('half_life_by_muscle',{}).get(muscle,half_life)
+        row['personalized']=bool(learned)
+        row['fatigue_estimate']=round(5*(1-math.exp(-learned['gain']*(row['residual_low']+row['residual_high'])/2)),1) if learned else None
         reference_weeks = []
         for start, cov in zip((7, 14, 21), coverage[1:]):
             if cov == 7:
