@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const csrf = document.querySelector('meta[name="iron-token"]').content;
-let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false;
+let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscleData;
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Iron-Token':csrf},body:JSON.stringify(body)});
   const data = await res.json();
@@ -44,6 +44,8 @@ async function refreshReport() {
   $('observations').replaceChildren(...r.observations.map(n=>text('li',n)));
   $('focus').textContent=r.focus;
   $('limits').textContent=r.limits;
+  muscleData=r.muscle_load;
+  renderMuscles(muscleData);
   $('report-mode').textContent=r.day_context.label;
   $('plan-context').textContent=r.day_context.reason;
   $('training-heading').textContent=r.day_context.mode==='training'?'训练表现回顾':'最近训练回顾';
@@ -78,6 +80,7 @@ async function refreshReport() {
   if(loadedDate!==d||!dirtyCheckin){
     $('energy').value=r.checkin.energy??3;$('soreness').value=r.checkin.soreness??0;$('note').value=r.checkin.note??'';
     $('daily-plan').value=r.day_context.plan;
+    renderSoreness(muscleData.groups,r.checkin.muscle_soreness||{});
     updateRanges();dirtyCheckin=false;
   }
   loadedDate=d;
@@ -88,6 +91,53 @@ async function refreshReport() {
   $('ai-meta').textContent=ai.generated_at?`已保存的解读 · ${ai.model} · ${new Date(ai.generated_at*1000).toLocaleString('zh-CN')}（同步后可重新生成）`:'';
 }
 function updateRanges(){for(const key of ['energy','soreness'])$(key+'-value').textContent=$(key).value+' / 5';}
+function option(value,label){const o=text('option',label);o.value=value;return o;}
+function renderMuscles(m){
+  $('half-life').value=String(m.half_life_days);
+  const body=$('muscle-rows');body.replaceChildren();
+  for(const row of m.muscles){
+    const el=text('tr','');
+    const values=[row.name,fmt(row.direct_sets,1),fmt(row.indirect_sets,1),`${fmt(row.previous_sets,1)} → ${fmt(row.week_sets,1)}${row.week_change==null?'（读取未齐）':''}`,row.usual_week==null?'样本不足':`${fmt(row.usual_week,1)}（${row.reference_weeks}周）`,`${fmt(row.residual_low,2)}–${fmt(row.residual_high,2)}`,row.last_trained||'暂无',row.soreness==null?'未填':String(row.soreness)];
+    for(const v of values)el.append(text('td',v));body.append(el);
+  }
+  if(!m.muscles.length){const row=text('tr',''),cell=text('td','暂无已归类的力量组；先同步记录或校准动作归属。');cell.colSpan=8;row.append(cell);body.append(row);}
+  $('muscle-alerts').replaceChildren(...m.alerts.map(a=>text('li',a)));
+  $('muscle-focus').textContent=m.focus;
+  $('muscle-method').textContent=m.method;
+  $('muscle-counts').textContent=`过去 28 天：力量 ${m.counts.strength} 组 · 辅助 ${m.counts.support} 组 · 活动度 ${m.counts.mobility} 组 · 待归类 ${m.counts.unmapped} 组。`;
+}
+function renderSoreness(groups,saved){
+  const box=$('muscle-soreness');box.replaceChildren();
+  for(const [key,label] of Object.entries(groups)){
+    const row=text('div','','soreness-row'),select=text('select','');select.id='soreness-'+key;select.dataset.muscle=key;
+    select.append(option('','未填'),...Array.from({length:6},(_,i)=>option(String(i),String(i))));select.value=saved[key]??'';
+    select.onchange=()=>{dirtyCheckin=true;};const lab=text('label',label);lab.htmlFor=select.id;row.append(lab,select);box.append(row);
+  }
+}
+function localSoreness(){const values={};for(const el of $('muscle-soreness').querySelectorAll('select'))if(el.value!=='')values[el.dataset.muscle]=Number(el.value);return values;}
+function renderMapping(){
+  const e=muscleData.exercises.find(e=>e.name===$('mapping-exercise').value);if(!e)return;
+  $('mapping-kind').value=e.kind;$('mapping-source').textContent=e.source==='user'?'使用你保存的归属':'默认归属，请按实际动作核对';
+  const box=$('mapping-weights');box.replaceChildren();
+  for(const [key,label] of Object.entries(muscleData.groups)){
+    const row=text('div','','mapping-row'),select=text('select','');select.id='weight-'+key;select.dataset.muscle=key;
+    select.append(option('0','不计入'),option('1','主练 × 1'),option('0.5','间接 × 0.5'));select.value=String(e.weights[key]||0);
+    const lab=text('label',label);lab.htmlFor=select.id;row.append(lab,select);box.append(row);
+  }
+}
+$('muscle-edit').onclick=()=>{
+  if(!muscleData?.exercises.length){status('先同步训练记录，再校准动作归属。',true);return;}
+  $('mapping-exercise').replaceChildren(...muscleData.exercises.map(e=>option(e.name,`${e.name} · ${muscleData.kinds[e.kind]}`)));
+  $('mapping-status').textContent='';renderMapping();$('muscle-dialog').showModal();
+};
+$('mapping-exercise').onchange=()=>{renderMapping();$('mapping-status').textContent='';};
+$('muscle-close').onclick=()=>$('muscle-dialog').close();
+$('muscle-form').onsubmit=async e=>{e.preventDefault();try{
+  const name=$('mapping-exercise').value,weights={};for(const select of $('mapping-weights').querySelectorAll('select'))if(Number(select.value))weights[select.dataset.muscle]=Number(select.value);
+  await api('/api/muscles',{name,kind:$('mapping-kind').value,weights});await refreshReport();renderMapping();$('mapping-status').textContent='已保存，负荷与日报已重算。';
+}catch(e){$('mapping-status').textContent=e.message;}};
+$('mapping-reset').onclick=async()=>{try{await api('/api/muscles',{name:$('mapping-exercise').value,reset:true});await refreshReport();renderMapping();$('mapping-status').textContent='已恢复默认归属。';}catch(e){$('mapping-status').textContent=e.message;}};
+$('save-half-life').onclick=async()=>{try{await api('/api/muscles',{half_life_days:Number($('half-life').value)});await refreshReport();status('衰减假设已保存并重算；它不是实际恢复时间。');}catch(e){status(e.message,true);}};
 async function saveSettings(){
   const fields={'xunji_key':'xunji-key','oura_client_id':'oura-client','oura_client_secret':'oura-secret','openai_key':'openai-key','openai_model':'openai-model'};
   const body={};for(const [k,id] of Object.entries(fields))if($(id).value.trim())body[k]=$(id).value.trim();
@@ -105,7 +155,7 @@ $('report-date').onchange=()=>{dirtyCheckin=false;refreshReport().catch(e=>statu
 for(const key of ['energy','soreness'])$(key).oninput=()=>{dirtyCheckin=true;updateRanges();};
 $('note').oninput=()=>{dirtyCheckin=true;};
 $('daily-plan').onchange=()=>{dirtyCheckin=true;};
-$('checkin-form').onsubmit=async e=>{e.preventDefault();const d=selected();try{await api('/api/checkin',{date:d,energy:Number($('energy').value),soreness:Number($('soreness').value),note:$('note').value,plan:$('daily-plan').value});if(d===selected()){dirtyCheckin=false;await refreshReport();}status('当日计划与感受已保存，日报已更新。');}catch(e){status(e.message,true);}};
+$('checkin-form').onsubmit=async e=>{e.preventDefault();const d=selected();try{await api('/api/checkin',{date:d,energy:Number($('energy').value),soreness:Number($('soreness').value),note:$('note').value,plan:$('daily-plan').value,muscle_soreness:localSoreness()});if(d===selected()){dirtyCheckin=false;await refreshReport();}status('当日计划与感受已保存，日报已更新。');}catch(e){status(e.message,true);}};
 $('ai-generate').onclick=async()=>{
   if(!state.ai){$('settings-dialog').showModal();$('settings-status').textContent='请先填写 OpenAI API Key 和模型 ID。';return;}
   if(!$('ai-consent').checked){status('请先勾选 AI 摘要发送授权。',true);return;}

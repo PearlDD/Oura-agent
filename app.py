@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo
+import muscles
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
@@ -369,12 +370,43 @@ def save_checkin(body):
     plan = body.get('plan', 'undecided')
     if plan not in ('train', 'rest', 'undecided'):
         raise AppError('今日计划无效。')
+    local_soreness = body.get('muscle_soreness')
+    if local_soreness is not None:
+        if not isinstance(local_soreness, dict) or any(k not in muscles.GROUPS or isinstance(v, bool)
+            or not isinstance(v, int) or not 0 <= v <= 5 for k, v in local_soreness.items()):
+            raise AppError('肌群酸痛必须为 0–5 的整数，未填的肌群请留空。')
     with LOCK:
         checks = load(DATA / 'checkins.json')
         # Preserve any existing diary fields as the format evolves.
         checks[d] = {**checks.get(d, {}), 'energy': energy, 'soreness': soreness,
                      'note': str(body.get('note', ''))[:1000], 'plan': plan}
+        if local_soreness is not None:
+            checks[d]['muscle_soreness'] = local_soreness
         save(DATA / 'checkins.json', checks)
+
+
+def save_muscle_config(body):
+    with LOCK:
+        config = load(DATA / 'muscles.json')
+        if 'half_life_days' in body:
+            days = body['half_life_days']
+            if isinstance(days, bool) or days not in (1, 2, 3, 4):
+                raise AppError('半衰期假设请选择 1–4 天。')
+            config['half_life_days'] = int(days)
+        if 'name' in body:
+            name = str(body['name']).strip()
+            if not name or len(name) > 200:
+                raise AppError('动作名称无效。')
+            mappings = dict(config.get('exercises', {}))
+            if body.get('reset') is True:
+                mappings.pop(name, None)
+            else:
+                try:
+                    mappings[name] = muscles.validate_mapping(body)
+                except ValueError as e:
+                    raise AppError(str(e)) from None
+            config['exercises'] = mappings
+        save(DATA / 'muscles.json', config)
 
 
 def report(d):
@@ -439,6 +471,7 @@ def report(d):
               'last_date': last_date, 'last_sessions': last_sessions, 'checkin': check,
               'day_context': context, 'days_since_training': gap,
               'trends': recovery_trends(recovery, date),
+              'muscle_load': muscles.model(sessions, fetched, d, load(DATA / 'muscles.json'), check.get('muscle_soreness', {})),
               'comparisons': exercise_comparisons(sessions, last_date, last_sessions),
               'observations': notes, 'focus': focus,
               'limits': '基线使用所选日期之前 28 天的中位数，至少需 7 个有效夜晚。正式组只计已完成且非热身组；递减组子组单独计数。负重总量仅供日志核对，不代表肌肉刺激或不同动作间的可比训练负荷。恢复指标不能判断某块肌肉是否恢复，也不会自动修改训练计划。'}
@@ -467,7 +500,7 @@ def markdown(r):
             s = c['same_load']
             detail = (f'同负重 {s["weight_kg"]:g} kg 的最佳次数 {s["previous_reps"]:g} → {s["current_reps"]:g}。' if s else '无相同负重的次数可比记录。')
             lines.append(f'- {c["name"]}：对比 {c["previous_date"]}，正式组 {c["previous_sets"]} → {c["current_sets"]}；{detail}')
-    return '\n'.join(lines)
+    return '\n'.join(lines) + muscles.markdown(r['muscle_load'])
 
 
 def ai_report(d):
@@ -478,6 +511,7 @@ def ai_report(d):
     if not r['last_sessions'] and len(r['recovery']) <= 1:
         raise AppError('请先同步训练或 Oura 数据，再生成 AI 解读。')
     summary = {k: v for k, v in r.items() if k not in ('checkin', 'last_sessions')}
+    summary['muscle_load'] = {k: v for k, v in r['muscle_load'].items() if k not in ('exercises', 'groups', 'kinds')}
     summary['subjective'] = {k: v for k, v in r['checkin'].items() if k != 'note'}
     summary['last_training'] = [{'date': t['date'], 'movements': t['movements']} for t in r['last_sessions']]
     data = request_json('https://api.openai.com/v1/responses', {
@@ -602,6 +636,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply({'ok': True})
             elif p == '/api/checkin':
                 save_checkin(body)
+                self.reply({'ok': True})
+            elif p == '/api/muscles':
+                save_muscle_config(body)
                 self.reply({'ok': True})
             elif p == '/api/oura/connect':
                 s = settings()
