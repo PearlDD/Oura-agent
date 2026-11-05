@@ -465,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply({'today': today().isoformat(), 'timezone': str(TZ), 'xunji': bool(s.get('xunji_key')),
                             'oura': bool(s.get('oura_tokens')), 'oura_configured': bool(s.get('oura_client_id') and s.get('oura_client_secret')),
                             'ai': bool(s.get('openai_key') and s.get('openai_model')), 'model': s.get('openai_model', ''),
-                            'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://127.0.0.1:{PORT}/oauth/callback'})
+                            'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://localhost:{PORT}/oauth/callback'})
             elif p in ('/api/report', '/api/export', '/api/ai'):
                 d = day(params.get('date', [today().isoformat()])[0])
                 if p == '/api/report':
@@ -487,7 +487,7 @@ class Handler(BaseHTTPRequestHandler):
                 s = settings()
                 tokens = request_json('https://api.ouraring.com/oauth/token', {
                     'grant_type': 'authorization_code', 'code': code, 'client_id': s['oura_client_id'],
-                    'client_secret': s['oura_client_secret'], 'redirect_uri': f'http://127.0.0.1:{PORT}/oauth/callback',
+                    'client_secret': s['oura_client_secret'], 'redirect_uri': f'http://localhost:{PORT}/oauth/callback',
                     'code_verifier': entry['verifier']}, form=True)
                 store_tokens(tokens)
                 self.redirect('/?connected=oura')
@@ -549,7 +549,7 @@ class Handler(BaseHTTPRequestHandler):
                 challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
                 self.reply({'url': 'https://cloud.ouraring.com/oauth/authorize?' + urllib.parse.urlencode({
                     'response_type': 'code', 'client_id': s['oura_client_id'],
-                    'redirect_uri': f'http://127.0.0.1:{PORT}/oauth/callback', 'scope': 'daily',
+                    'redirect_uri': f'http://localhost:{PORT}/oauth/callback', 'scope': 'daily',
                     'state': state, 'code_challenge': challenge, 'code_challenge_method': 'S256'})})
             elif p == '/api/ai':
                 if body.get('consent') is not True:

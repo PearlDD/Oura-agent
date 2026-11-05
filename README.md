@@ -25,7 +25,7 @@ Open http://127.0.0.1:8765 . Keep the local server running while using the dashb
 Create an OAuth application in the Oura developer portal. Use the public website and policy URLs above. Register this exact local redirect URI:
 
 ```text
-http://127.0.0.1:8765/oauth/callback
+http://localhost:8765/oauth/callback
 ```
 
 Enter your Client ID and Client Secret into the local dashboard, then authorize Oura. The MVP requests the `daily` scope. Oura account/membership requirements apply. GitHub Pages is not the OAuth callback server; the local Python app handles the callback.
