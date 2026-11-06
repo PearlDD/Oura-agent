@@ -289,7 +289,7 @@ $('settings-close').onclick=()=>$('settings-dialog').close();
 $('settings-form').onsubmit=async e=>{e.preventDefault();try{await saveSettings();}catch(e){$('settings-status').textContent=e.message;}};
 $('connect-oura').onclick=async()=>{const b=$('connect-oura');b.disabled=true;try{await saveSettings();const r=await api('/api/oura/connect',{});window.location.assign(r.url);}catch(e){$('settings-status').textContent=e.message;b.disabled=false;}};
 $('sync').onclick=async()=>{try{$('sync').disabled=true;await api('/api/sync',{days:Number($('sync-days').value)});wasRunning=true;status('开始同步…');await refreshStatus();}catch(e){status(e.message,true);$('sync').disabled=false;}};
-$('report-date').onchange=()=>{dirtyCheckin=false;refreshReport().catch(e=>status(e.message,true));};
+$('report-date').onchange=()=>{dirtyCheckin=false;$('chat-consent').checked=false;refreshReport().catch(e=>status(e.message,true));if(!$('chat-drawer').hidden)loadChat();};
 for(const key of ['energy','soreness'])$(key).oninput=()=>{dirtyCheckin=true;updateRanges();};
 $('note').oninput=()=>{dirtyCheckin=true;};
 $('daily-plan').onchange=()=>{dirtyCheckin=true;};
@@ -300,5 +300,49 @@ $('ai-generate').onclick=async()=>{
   const b=$('ai-generate'),d=selected();b.disabled=true;b.textContent='正在生成…';
   try{const r=await api('/api/ai',{date:d,consent:true});if(d===selected()){$('ai-result').textContent=r.text;$('ai-meta').textContent='刚刚生成 · '+r.model;}await refreshReport();status('AI 决策已保存。');}
   catch(e){status(e.message,true);}finally{b.disabled=false;b.textContent='生成 AI 日报 ↗';}
+};
+let chatState=null,chatDate=null,chatLoading=false,chatSending=false;
+const chatDrafts={};
+function chatStatus(message,error=false){$('chat-status').textContent=message;$('chat-status').classList.toggle('error',error);}
+function renderChat(c){
+  chatState=c;$('chat-context-date').textContent='正在讨论 '+c.date+' 的报告';
+  $('chat-model').textContent=c.ready?`${c.model} · 最近 6 轮作为对话上下文`:'请先在连接与设置配置模型和 API Key';
+  const box=$('chat-messages');box.replaceChildren();
+  if(!c.messages.length){const empty=text('div','','chat-welcome');empty.append(text('strong','看不懂哪一处？直接问。'),text('p','我会结合这份报告和当前计划解释。你的问题可以继续追问；这里的对话与 Codex 聊天分别保存。'));box.append(empty);}
+  for(const m of c.messages){const bubble=text('article','',m.role==='user'?'chat-bubble chat-user':'chat-bubble chat-agent');bubble.append(text('small',m.role==='user'?'你':'训练 Agent'),text('p',m.text));if(m.role==='assistant'&&m.context_changed)bubble.append(text('small','回答后数据已变化，以新提问时的背景为准。','chat-old'));box.append(bubble);}
+  $('chat-new').disabled=chatSending||c.busy;
+  $('chat-send').disabled=chatSending||c.busy||!c.ready;
+  const examples=['这些组数是减载还是基础安排？','今天为什么建议休息？','预留 3 次是什么意思？'];
+  $('chat-suggestions').replaceChildren(...(c.messages.length?[]:examples.map(q=>{const b=text('button',q,'ghost');b.type='button';b.onclick=()=>{$('chat-input').value=q;chatDrafts[chatDate]=q;$('chat-input').focus();};return b;})));
+  box.scrollTop=box.scrollHeight;
+}
+async function loadChat(){
+  const d=selected();
+  if(chatDate&&chatDate!==d)chatDrafts[chatDate]=$('chat-input').value;
+  chatDate=d;chatLoading=true;chatStatus('正在读取这份报告的对话…');$('chat-send').disabled=true;
+  try{const c=await api('/api/chat?date='+d);if(chatDate!==d)return;renderChat(c);$('chat-input').value=chatDrafts[d]||'';chatStatus(c.busy?'Agent 正在回复，请稍后刷新对话。':c.provider_notice?'上次连接检查：'+c.provider_notice:'',!!c.provider_notice);}
+  catch(e){if(chatDate===d){chatState=null;$('chat-messages').replaceChildren();chatStatus(e.message,true);}}
+  finally{if(chatDate===d)chatLoading=false;}
+}
+async function openChat(){
+  $('chat-drawer').hidden=false;$('chat-toggle').setAttribute('aria-expanded','true');
+  await loadChat();$('chat-input').focus();
+}
+function closeChat(){if(chatDate)chatDrafts[chatDate]=$('chat-input').value;$('chat-drawer').hidden=true;$('chat-toggle').setAttribute('aria-expanded','false');$('chat-toggle').focus();}
+$('chat-toggle').onclick=()=>{$('chat-drawer').hidden?openChat():closeChat();};
+$('chat-open-inline').onclick=openChat;$('chat-close').onclick=closeChat;
+$('chat-input').oninput=()=>{if(chatDate)chatDrafts[chatDate]=$('chat-input').value;};
+$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
+$('chat-drawer').onkeydown=e=>{if(e.key==='Escape')closeChat();};
+$('chat-new').onclick=async()=>{if(chatSending||!chatState||chatLoading)return;try{const d=chatDate;const c=await api('/api/chat/new',{date:d,revision:chatState.revision});if(d===chatDate){chatDrafts[d]='';$('chat-input').value='';$('chat-consent').checked=false;renderChat(c);chatStatus('已开始新对话，旧对话仍保存在本机归档。');}}catch(e){chatStatus(e.message,true);}};
+$('chat-form').onsubmit=async e=>{
+  e.preventDefault();if(chatSending||chatLoading||!chatState||chatState.date!==chatDate)return;
+  const d=chatDate,message=$('chat-input').value.trim();
+  if(!message){chatStatus('先输入一个问题。',true);return;}
+  if(!$('chat-consent').checked){chatStatus('请先勾选本次聊天的数据发送授权。',true);return;}
+  chatSending=true;$('chat-send').disabled=true;$('chat-new').disabled=true;chatStatus('Agent 正在结合报告思考…');
+  try{const c=await api('/api/chat',{date:d,message,revision:chatState.revision,consent:true});chatDrafts[d]='';if(chatDate===d){$('chat-input').value='';renderChat(c);chatStatus('已回复；回答基于发送时的报告。');}}
+  catch(e){if(chatDate===d)chatStatus(e.message+' 问题仍保留，可重试。',true);}
+  finally{chatSending=false;$('chat-send').disabled=!chatState?.ready||chatState?.busy;$('chat-new').disabled=!!chatState?.busy;}
 };
 (async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));},1800);}catch(e){status('本地服务连接失败：'+e.message,true);}})();

@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import secrets
+import sys
 import statistics
 import threading
 import time
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 import muscles
 import coach
 import decision
+import chat
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
@@ -87,10 +89,21 @@ def request_json(url, payload=None, token=None, form=False):
             raise AppError('接口响应过大，请缩小同步范围。')
         if raw[:2] == b'\x1f\x8b':
             raw = gzip.decompress(raw)
-        return json.loads(raw)
+        result=json.loads(raw)
+        if url.startswith('https://api.openai.com/'):
+            save(DATA/'ai-status.json',{'ok':True,'checked_at':time.time()})
+        return result
     except urllib.error.HTTPError as e:
         labels = {401: '授权无效或已过期，请重新连接', 403: '无访问权限，请检查会员或授权范围',
                   429: '请求过于频繁，请稍后再试'}
+        if e.code == 429 and url.startswith('https://api.openai.com/'):
+            try:
+                error=json.loads(e.read(16384)).get('error',{})
+                if error.get('code')=='insufficient_quota' or error.get('type')=='insufficient_quota':
+                    labels[429]='OpenAI API 额度不足，请检查账户余额和账单设置'
+            except (ValueError,AttributeError):pass
+        if url.startswith('https://api.openai.com/'):
+            save(DATA/'ai-status.json',{'ok':False,'checked_at':time.time(),'message':labels.get(e.code,'模型请求失败，请检查设置或稍后重试')})
         raise AppError(f'接口 HTTP {e.code}：{labels.get(e.code, "请求失败，请稍后重试")}。') from None
     except (urllib.error.URLError, TimeoutError):
         raise AppError('无法连接服务，请检查网络后重试。') from None
@@ -732,10 +745,12 @@ class Handler(BaseHTTPRequestHandler):
                             'oura': bool(s.get('oura_tokens')), 'oura_configured': bool(s.get('oura_client_id') and s.get('oura_client_secret')),
                             'ai': bool(s.get('openai_key') and s.get('openai_model')), 'model': s.get('openai_model', ''),
                             'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://localhost:{PORT}/oauth/callback'})
-            elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach'):
+            elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach', '/api/chat'):
                 d = day(params.get('date', [today().isoformat()])[0])
                 if p == '/api/report':
                     self.reply(report(d))
+                elif p == '/api/chat':
+                    self.reply(chat.view(sys.modules[__name__],d))
                 elif p == '/api/coach':
                     self.reply(coach_view(d))
                 elif p == '/api/ai':
@@ -826,6 +841,10 @@ class Handler(BaseHTTPRequestHandler):
                     'response_type': 'code', 'client_id': s['oura_client_id'],
                     'redirect_uri': f'http://localhost:{PORT}/oauth/callback', 'scope': 'daily',
                     'state': state, 'code_challenge': challenge, 'code_challenge_method': 'S256'})})
+            elif p == '/api/chat':
+                self.reply(chat.send(sys.modules[__name__],body))
+            elif p == '/api/chat/new':
+                self.reply(chat.new_conversation(sys.modules[__name__],body))
             elif p == '/api/ai':
                 if body.get('consent') is not True:
                     raise AppError('请先确认将摘要发送至 OpenAI。')
