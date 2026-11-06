@@ -443,7 +443,7 @@ def coach_action(body):
     action=body.get('action')
     with LOCK:
         if action=='profile':
-            p=coach.profile({**body.get('profile',{}),'confirmed':True})
+            p=coach.profile({**load(DATA/'coach-profile.json'),**body.get('profile',{}),'confirmed':True})
             save(DATA/'coach-profile.json',p)
         elif action=='feedback':
             f=coach.validate_feedback(body)

@@ -43,3 +43,11 @@ Oura 睡眠、HRV、夜间心率显示在同一日报，供整体背景解读；
 - [Methods for Regulating and Monitoring Resistance Training](https://pubmed.ncbi.nlm.nih.gov/33312273/)
 - [Effects of subjective and objective autoregulation methods](https://pubmed.ncbi.nlm.nih.gov/33520457/)
 - [Autoregulation in Resistance Training: Addressing the Inconsistencies](https://pubmed.ncbi.nlm.nih.gov/32813181/)
+
+## 肌群优先级、分配与肩部注意
+
+可设置重点发展和低优先级肌群。低优先级区别于禁练：有替代动作时优先替换，不自动视为损伤或永久排除。上下肢交替按已选训练日顺序安排。
+
+肩部历史注意与当前动作范围待核对分开：历史注意可以保留上肢草案、增加预留次数并暂停自动递增目标次数；动作范围待核对则暂停上肢草案。两者都不构成肩袖诊断或康复计划。用户明确填写不适仍触发原有待核对逻辑。
+
+单次时长和星期尚未确认时可显示临时安排；偏好保存后会重算未接受的草案，已接受计划仍保留并另列修订。

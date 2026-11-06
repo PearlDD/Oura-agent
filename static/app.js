@@ -92,7 +92,7 @@ async function refreshReport() {
   $('ai-meta').textContent=ai.generated_at?`已保存的解读 · ${ai.model} · ${new Date(ai.generated_at*1000).toLocaleString('zh-CN')}（同步后可重新生成）`:'';
 }
 function renderCoach(c,d){
-  $('coach-profile-state').textContent=c.profile.confirmed?'偏好已确认':'偏好待确认';
+  $('coach-profile-state').textContent=c.profile.confirmed?(c.profile.schedule_provisional||c.profile.minutes_provisional?'安排待确认':'偏好已确认'):'偏好待确认';
   const labels={draft:'草案',accepted:'已接受',completed:'已手动标记完成',skipped:'已跳过'};
   const box=$('coach-plans');box.replaceChildren();
   const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
@@ -139,14 +139,14 @@ $('feedback-form').onsubmit=async e=>{e.preventDefault();try{const fatigue={};fo
 }catch(e){status(e.message,true);}};
 $('coach-run').onclick=async()=>{const b=$('coach-run');b.disabled=true;try{await api('/api/coach',{action:'run'});await refreshReport();status('已更新校准、计划草案与执行跟进。');}catch(e){status(e.message,true);}finally{b.disabled=false;}};
 $('coach-profile-open').onclick=()=>{
-  const p=coachData.profile;$('coach-goal').value=p.goal;$('coach-minutes').value=p.minutes;$('coach-exercises').value=p.excluded_exercises.join('\n');
-  for(const [id,entries,chosen] of [['coach-weekdays',['周一','周二','周三','周四','周五','周六','周日'].map((n,i)=>[String(i),n]),p.weekdays.map(String)],['coach-exclusions',Object.entries(muscleData.groups),p.excluded_muscles]]){
+  const p=coachData.profile;$('coach-goal').value=p.goal;$('coach-minutes').value=p.minutes;$('coach-split').value=p.split||'history';$('coach-shoulder-caution').checked=!!p.shoulder_caution;$('coach-shoulder-review').checked=!!p.shoulder_review_required;$('coach-exercises').value=p.excluded_exercises.join('\n');
+  for(const [id,entries,chosen] of [['coach-weekdays',['周一','周二','周三','周四','周五','周六','周日'].map((n,i)=>[String(i),n]),p.weekdays.map(String)],['coach-exclusions',Object.entries(muscleData.groups),p.excluded_muscles],['coach-priorities',Object.entries(muscleData.groups),p.priority_muscles||[]],['coach-depriorities',Object.entries(muscleData.groups),p.deprioritized_muscles||[]]]){
     const box=$(id);box.replaceChildren();for(const [key,label] of entries){const lab=text('label','','choice'),input=document.createElement('input');input.type='checkbox';input.value=key;input.checked=chosen.includes(key);lab.append(input,document.createTextNode(label));box.append(lab);}
   }
   $('coach-profile-message').textContent='';$('coach-profile-dialog').showModal();
 };
 $('coach-profile-close').onclick=()=>$('coach-profile-dialog').close();
-$('coach-profile-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/coach',{action:'profile',profile:{goal:$('coach-goal').value,minutes:Number($('coach-minutes').value),weekdays:[...$('coach-weekdays').querySelectorAll('input:checked')].map(e=>Number(e.value)),excluded_muscles:[...$('coach-exclusions').querySelectorAll('input:checked')].map(e=>e.value),excluded_exercises:$('coach-exercises').value.split('\n').map(s=>s.trim()).filter(Boolean)}});await refreshReport();$('coach-profile-dialog').close();status('训练偏好已保存，未来草案已更新。');}catch(e){$('coach-profile-message').textContent=e.message;}};
+$('coach-profile-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/coach',{action:'profile',profile:{goal:$('coach-goal').value,split:$('coach-split').value,shoulder_caution:$('coach-shoulder-caution').checked,shoulder_review_required:$('coach-shoulder-review').checked,schedule_provisional:false,minutes_provisional:false,priority_muscles:[...$('coach-priorities').querySelectorAll('input:checked')].map(e=>e.value),deprioritized_muscles:[...$('coach-depriorities').querySelectorAll('input:checked')].map(e=>e.value),minutes:Number($('coach-minutes').value),weekdays:[...$('coach-weekdays').querySelectorAll('input:checked')].map(e=>Number(e.value)),excluded_muscles:[...$('coach-exclusions').querySelectorAll('input:checked')].map(e=>e.value),excluded_exercises:$('coach-exercises').value.split('\n').map(s=>s.trim()).filter(Boolean)}});await refreshReport();$('coach-profile-dialog').close();status('训练偏好已保存，未来草案已更新。');}catch(e){$('coach-profile-message').textContent=e.message;}};
 function updateRanges(){for(const key of ['energy','soreness'])$(key+'-value').textContent=$(key).value+' / 5';}
 function option(value,label){const o=text('option',label);o.value=value;return o;}
 function renderMuscles(m){

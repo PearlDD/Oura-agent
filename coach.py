@@ -10,7 +10,10 @@ import statistics
 import muscles
 
 DEFAULT_PROFILE = {'goal': 'balanced', 'weekdays': [0, 2, 4], 'minutes': 45,
-                   'excluded_muscles': [], 'excluded_exercises': [], 'confirmed': False}
+                   'excluded_muscles': [], 'excluded_exercises': [], 'confirmed': False,
+                   'priority_muscles': [], 'deprioritized_muscles': [], 'split':'history',
+                   'shoulder_review_required':False,'shoulder_caution':False,
+                   'schedule_provisional':False,'minutes_provisional':False}
 
 
 def profile(value):
@@ -26,6 +29,13 @@ def profile(value):
         raise ValueError('需避开的肌群无效。')
     if not isinstance(result['excluded_exercises'], list) or any(not isinstance(x, str) or len(x)>200 for x in result['excluded_exercises']):
         raise ValueError('需避开的动作无效。')
+    for key in ('priority_muscles','deprioritized_muscles'):
+        if not isinstance(result[key],list) or any(k not in muscles.GROUPS for k in result[key]):
+            raise ValueError('肌群优先级无效。')
+    if set(result['priority_muscles'])&set(result['deprioritized_muscles']):
+        raise ValueError('同一肌群不能同时为重点和低优先级。')
+    if result['split'] not in ('history','upper_lower') or any(type(result[k]) is not bool for k in ('shoulder_review_required','shoulder_caution','schedule_provisional','minutes_provisional')):
+        raise ValueError('分配方式或待确认状态无效。')
     return {k: result[k] for k in DEFAULT_PROFILE}
 
 
@@ -163,7 +173,7 @@ def tracking(plan,sessions,fetched):
             'message':f'日志匹配 {done}/{total} 个计划正式组；匹配只核对动作名与组数。'}
 
 
-def candidates(sessions,config,p):
+def candidates(sessions,config,p,focus='history'):
     templates=[]
     excluded=set(p['excluded_exercises'])
     for t in sorted(sessions,key=lambda t:t['date'],reverse=True):
@@ -173,6 +183,11 @@ def candidates(sessions,config,p):
             work=[s for s in m['sets'] if s['done'] and not s['warmup']]
             if mapped['kind']!='strength' or not work or m['name'] in excluded or set(mapped['weights'])&set(p['excluded_muscles']):
                 continue
+            lower={'glutes','hamstrings','quads','calves'}
+            primary={k for k,w in mapped['weights'].items() if w==1}
+            if focus=='lower' and not primary&lower:continue
+            if focus=='upper' and primary&lower:continue
+            if p.get('shoulder_review_required') and not primary&lower:continue
             reps=[s['reps'] for s in work if s.get('reps') is not None and 3<=s['reps']<=30]
             weights=[s['weight_kg'] for s in work if s.get('weight_kg') is not None and s['weight_kg']>=0]
             selected.append({'name':m['name'],'sets':min(2,len(work)),
@@ -180,6 +195,8 @@ def candidates(sessions,config,p):
                              'reference_kg':round(statistics.median(weights),1) if weights else None,
                              'target_rir':3,'muscles':mapped['weights'],'source_date':t['date']})
         if selected:
+            preferred_moves=[e for e in selected if not any(w==1 and k in p.get('deprioritized_muscles',[]) for k,w in e['muscles'].items())]
+            if preferred_moves:selected=preferred_moves
             # Time budget is a rough planning bound, not measured workout duration.
             budget=max(1,(p['minutes']-10)//5)
             trimmed=[]
@@ -189,6 +206,10 @@ def candidates(sessions,config,p):
             sig=tuple(e['name'] for e in trimmed)
             if not any(tuple(e['name'] for e in x)==sig for x in templates):
                 templates.append(trimmed)
+    # With low-priority muscles, prefer available templates that avoid directly targeting them.
+    if p.get('deprioritized_muscles'):
+        preferred=[t for t in templates if not any(w==1 and k in p['deprioritized_muscles'] for e in t for k,w in e['muscles'].items())]
+        if preferred:templates=preferred
     return templates
 
 
@@ -204,18 +225,28 @@ def make_plan(d,sessions,fetched,config,p,feedback,checks,history,forecast=None)
     if current.get('plan')=='train':scheduled=True
     base={'date':d,'kind':'train' if scheduled else 'rest','status':'draft','profile_confirmed':p['confirmed'],
           'exercises':[],'reasons':[],'version':1}
+    if p['schedule_provisional']:base['reasons'].append('训练日是为每周四练暂排的日期，尚待你确认；四练是可调整框架，不要求凑满。')
+    if p['minutes_provisional']:base['reasons'].append('每次时长暂沿用 45 分钟假设，尚待你确认。')
+    focus='history'
+    if p['split']=='upper_lower' and date.weekday() in p['weekdays']:
+        focus='lower' if sorted(p['weekdays']).index(date.weekday())%2==0 else 'upper'
+    base['focus']=focus
     if not p['confirmed']:base['reasons'].append('训练偏好尚未确认：暂按每周一/三/五、45 分钟、两者兼顾起草。')
     if not scheduled:
         base['reasons'].append('按可训练日或你保存的当日计划安排休息。');return base
     if discomfort:
         base.update(kind='review');base['reasons'].append('本日反馈存在不适，暂停自动生成动作，先核对需避开的动作和肌群。');return base
-    templates=candidates([t for t in sessions if t['date']<d],config,p)
+    if p['shoulder_review_required'] and focus=='upper':
+        base.update(kind='review');base['reasons'].append('肩部动作和可接受范围尚待核对，上肢日暂不自动分配推、拉或肩部动作。');return base
+    templates=candidates([t for t in sessions if t['date']<d],config,p,focus)
     if not templates:
         base.update(kind='review');base['reasons'].append('没有符合限制且已归类的历史力量动作，请先校准动作归属。');return base
     local=muscles.model(sessions+(forecast or []),fetched,d,personalized_config(config,history,d))
     load={m['key']:m['residual_high']+(m.get('fatigue_estimate') or 0) for m in local['muscles']}
     def score(template):
-        return sum(w*(load.get(k,0)+2*fatigue.get(k,0)+current.get('muscle_soreness',{}).get(k,0)) for e in template for k,w in e['muscles'].items())/max(1,len(template))
+        workload=sum(w*(load.get(k,0)+2*fatigue.get(k,0)+current.get('muscle_soreness',{}).get(k,0)) for e in template for k,w in e['muscles'].items())
+        priority=sum(w for e in template for k,w in e['muscles'].items() if k in p['priority_muscles'])
+        return (workload-.5*priority)/max(1,len(template))
     chosen=min(templates,key=score)
     selected=[]
     for original in chosen:
@@ -245,6 +276,10 @@ def make_plan(d,sessions,fetched,config,p,feedback,checks,history,forecast=None)
                  and all(s.get('rpe') is not None and s['rpe']<=8 for s in work) for work,f in past):
                 e['reps']=min(rep_high,e['reps']+1)
                 e['adaptation']='两次相关训练均反馈高于预期且完成组 RPE ≤ 8，草案增加一次目标次数，不自动加重量。'
+        if p['shoulder_caution'] and set(involved)&{'chest','lats','upper_back','front_delts','side_delts','rear_delts','rotator_cuff','serratus'}:
+            e['target_rir']=max(e['target_rir'],4)
+            e['reps']=min(e['reps'],max(rep_low,min(rep_high,original['reps'])))
+            e['adaptation']='肩部历史注意：先保留更多余力，不自动增加目标次数；核对训练中及次日是否出现不适。'
         selected.append(e)
     if not selected:
         base.update(kind='review');base['reasons'].append('候选动作涉及你反馈明显疲劳/酸痛的肌群，先核对安排，不自动补满训练量。');return base
@@ -252,6 +287,10 @@ def make_plan(d,sessions,fetched,config,p,feedback,checks,history,forecast=None)
     base['reasons'] += ['优先使用你做过的动作，按局部负荷与明确反馈排序。',
                         '起步每动作最多 2 个正式组；负重列只提供历史参考，不要求达到或加重。目标预留约 3 次，结合热身调整。',
                         'Oura 作为整体背景，不因单次 HRV 自动停练或判定某块肌肉已恢复。']
+    if p['priority_muscles']:base['reasons'].append('偏重肌群：'+'、'.join(muscles.GROUPS[k] for k in p['priority_muscles'])+'；不会用优先级覆盖疼痛、疲劳或排除条件。')
+    if p['deprioritized_muscles']:base['reasons'].append('低优先级肌群：'+'、'.join(muscles.GROUPS[k] for k in p['deprioritized_muscles'])+'；优先选择不以其为主练的可用历史模板，不等同永久禁练。')
+    if p['shoulder_review_required']:base['reasons'].append('下肢动作的持握或支撑也可能涉及肩部；本草案没有验证肩部耐受性，需结合具体不适再核对。')
+    if p['shoulder_caution']:base['reasons'].append('有肩部历史不适注意事项，目前无明确禁练动作；不视为肩袖诊断或康复处方，出现不适时先核对动作。')
     if any(e['target_rir']==4 for e in selected):base['reasons'].append('结合你填写的精神/局部疲劳反馈减少一组并增加预留次数。')
     return base
 

@@ -11,6 +11,31 @@ def session(date, name='杠铃卧推', rpe=8, reps=8, sets=4):
 
 
 class CoachTests(unittest.TestCase):
+    def test_upper_lower_split_and_low_priority_quads(self):
+        p={**coach.DEFAULT_PROFILE,'goal':'hypertrophy','weekdays':[0,2,3,5],
+           'minutes':60,'split':'upper_lower','deprioritized_muscles':['quads'],
+           'priority_muscles':['glutes','lats'],'confirmed':True}
+        sessions=[session('2026-11-01','杠铃深蹲'),session('2026-11-02','器械臀冲'),session('2026-11-03','高位下拉')]
+        lower=coach.make_plan('2026-11-09',sessions,[],{},p,[],{},[])
+        self.assertEqual(lower['focus'],'lower')
+        self.assertTrue(all('quads' not in e['muscles'] for e in lower['exercises']))
+        self.assertTrue(any('glutes' in e['muscles'] for e in lower['exercises']))
+        upper=coach.make_plan('2026-11-11',sessions,[],{},p,[],{},[])
+        self.assertEqual(upper['focus'],'upper')
+        self.assertTrue(all('glutes' not in e['muscles'] for e in upper['exercises']))
+
+    def test_shoulder_history_caution_differs_from_pending_review(self):
+        p={**coach.DEFAULT_PROFILE,'weekdays':[0,2,3,5],'split':'upper_lower','shoulder_caution':True}
+        sessions=[session('2026-11-01','高位下拉')]
+        allowed=coach.make_plan('2026-11-11',sessions,[],{},p,[],{},[])
+        self.assertEqual(allowed['kind'],'train')
+        self.assertEqual(allowed['exercises'][0]['target_rir'],4)
+        pending=coach.make_plan('2026-11-11',sessions,[],{}, {**p,'shoulder_review_required':True},[],{},[])
+        self.assertEqual(pending['kind'],'review')
+
+    def test_muscle_priority_cannot_contradict_itself(self):
+        with self.assertRaises(ValueError):coach.profile({'priority_muscles':['quads'],'deprioritized_muscles':['quads']})
+
     def test_feedback_is_explicit_and_validated(self):
         f=coach.validate_feedback({'date':'2026-11-05','phase':'pre','fatigue':{'chest':0}})
         self.assertEqual(f['fatigue']['chest'],0)
