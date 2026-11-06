@@ -33,7 +33,7 @@ async function refreshReport() {
   const d=selected();
   const r=await api('/api/report?date='+d);
   if(selected()!==d)return;
-  renderDecision(r.decision);
+  renderDecision(r.decision,r.coach_agent.plans[r.date]);renderClues(r);
   renderHealth(r.health_observations,d);
   const fields={sleep:'sleep_hours',hrv:'hrv',rhr:'rhr'};
   for(const [id,key] of Object.entries(fields)) {
@@ -46,6 +46,7 @@ async function refreshReport() {
   $('observations').replaceChildren(...r.observations.map(n=>text('li',n)));
   $('focus').textContent=r.focus;
   $('limits').textContent=r.limits;
+  coachData=r.coach_agent;
   muscleData=r.muscle_load;
   renderMuscles(muscleData);
   coachData=r.coach_agent;renderCoach(coachData,d);
@@ -56,7 +57,8 @@ async function refreshReport() {
   for(const [key,label,unit] of [['sleep_hours','主睡眠','小时'],['hrv','HRV','ms'],['rhr','夜间最低心率','bpm']]){
     const {recent,previous}=r.trends[key];
     const detail=recent.value==null||previous.value==null?`样本不足 · 最近 ${recent.n}/3 晚，此前 ${previous.n}/3 晚`:`${fmt(previous.value,1)} → ${fmt(recent.value,1)} ${unit} · 最近 ${recent.n} 晚 / 此前 ${previous.n} 晚`;
-    const row=text('div','','trend-row');row.append(text('strong',label),text('span',detail));$('recovery-trends').append(row);
+    const row=text('div','','trend-row');row.append(text('strong',label),text('span',detail));
+    if(recent.value!=null&&previous.value!=null){const max=Math.max(recent.value,previous.value,1)*1.12;for(const [v,cls,name] of [[previous.value,'trend-previous','此前'],[recent.value,'trend-current','最近']]){const bar=text('div','','trend-bar');bar.append(text('small',name));const rail=text('div',''),fill=text('i','',cls);fill.style.width=(v/max*100)+'%';rail.append(fill);bar.append(rail);row.append(bar);}}$('recovery-trends').append(row);
   }
   $('last-date').textContent=r.last_date||'暂无记录';
   const container=$('training');container.replaceChildren();
@@ -93,20 +95,49 @@ async function refreshReport() {
   $('ai-result').textContent=ai.text||'';
   $('ai-meta').textContent=ai.generated_at?`已保存的解读 · ${ai.model} · ${new Date(ai.generated_at*1000).toLocaleString('zh-CN')}（同步后可重新生成）`:'';
 }
-function renderDecision(record){
+function brief(value,max=82){
+  if(!value)return '';
+  const first=value.split(/(?<=[。！？])/u)[0];
+  return first.length>max?first.slice(0,max-1)+'…':first;
+}
+function decisionSignal(record,plan){
+  if(!record||record.stale)return {tone:'neutral',label:record?.stale?'该重新看一眼了':'等数据齐了再说',english:record?.stale?'UPDATE NEEDED':'WAIT FOR INSIGHT'};
+  const v=record.analysis.verdict;
+  if(v==='rest')return {tone:'red',label:'今天先休息',english:'REST & RESET'};
+  if(v==='reduce'||v==='light')return {tone:'amber',label:v==='light'?'轻轻动一动':'放慢一点',english:'GO EASY'};
+  if(v==='clarify')return {tone:'neutral',label:'先听听身体怎么说',english:'CHECK IN FIRST'};
+  if(plan?.kind!=='train')return {tone:'neutral',label:plan?.kind==='rest'?'按计划休息':'先核对今天的安排',english:plan?.kind==='rest'?'PLANNED REST':'CHECK YOUR PLAN'};
+  return {tone:'green',label:'按计划练，稳稳来',english:'READY FOR YOUR PLAN'};
+}
+function renderDecision(record,plan){
   const labels={keep:'保持原安排',reduce:'减量',rest:'休息',light:'轻量活动',clarify:'先补信息'};
-  const a=record?.analysis;
-  $('decision-verdict').textContent=record?.stale?'待重新分析':a?labels[a.verdict]:'等待分析';
-  $('decision-headline').textContent=a?.headline||'尚未生成本日 AI 决策';
-  $('decision-rationale').textContent=a?.rationale||'同步和规则计划更新不会冒充 AI 分析。聊天 Agent 生成后会保存在这里，也可以使用下方已配置的 API。';
-  $('decision-meta').textContent=record?`${record.stale?'数据或计划已变化，以下为历史结论；修订暂不可用。 ':''}${record.source} · ${record.created_at} · 置信度 ${a.confidence}`:'';
+  const a=record?.analysis,signal=decisionSignal(record,plan);
+  $('decision-panel').dataset.tone=signal.tone;
+  $('decision-signal').textContent=signal.label;$('decision-english').textContent=signal.english;
+  $('decision-verdict').textContent=record?.stale?'分析待更新':a?labels[a.verdict]:'尚无结论';
+  $('decision-headline').textContent=a?.headline||'同步数据后，让 Agent 看看今天适合怎么练。';
+  $('decision-rationale').textContent=a?brief(a.rationale.split(/(?<=[。！？])/u).find(v=>!v.includes('不存在的训练'))||a.rationale,105):'已有规则草案，等待实际 AI 分析。';
+  $('decision-full-rationale').textContent=a?.rationale||'';
+  $('decision-meta').textContent=record?`${record.source} · ${new Date(record.created_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · ${record.stale?'数据已变化，以下为历史分析':{low:'仍需主观反馈',medium:'部分信息待核对',high:'信息较完整'}[a.confidence]}`:'';
   $('decision-evidence').replaceChildren(...(a?.evidence||[]).map(e=>text('li',e.statement)));
   $('decision-options').replaceChildren(...(a?.options||[]).map(o=>text('p',`${labels[o.mode]} · ${o.when}：${o.details}`)));
   const box=$('decision-details');box.replaceChildren();
   for(const [label,key] of [['肌群负荷复核','muscle_review'],['短期调整','short_term'],['长期计划','long_term'],['待确认','questions']]){
     if(a?.[key]?.length){const ul=text('ul','');ul.append(...a[key].map(v=>text('li',v)));box.append(text('h3',label),ul);}
   }
+  $('decision-next').textContent=a?brief(a.questions?.[0]||a.short_term?.[0]||a.headline,85):'先同步 Oura 和训记，再生成当日分析。';
   $('decision-apply').hidden=!a?.adjustment||record.stale;
+}
+function renderClues(r){
+  const rows=[],cur=r.recovery;
+  for(const [key,label,unit] of [['hrv','HRV','ms'],['rhr','夜间最低心率','bpm']]){
+    const b=r.baseline[key].value,v=cur[key];
+    rows.push([label,v==null?'待同步':`${fmt(v)} ${unit}`,b==null?'基线不足':`平时 ${fmt(b)} ${unit}`]);
+  }
+  const h=r.health_observations.history.find(v=>v.date===r.date);
+  const level={major:'Major',minor:'Minor',none:'No signs',unknown:'未填写'}[h?.strain]||'未填写';
+  rows.push(['Strain',level,h?'用户报告':'待核对']);
+  $('decision-clues').replaceChildren(...rows.map(([label,value,sub])=>{const row=text('div','','decision-clue');row.append(text('span',label),text('strong',value),text('small',sub));return row;}));
 }
 function renderHealth(h,d){
   const row=h.history.find(v=>v.date===d)||{};
@@ -123,10 +154,11 @@ function renderCoach(c,d){
   const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
   for(const p of upcoming){
     const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · 版本 ${p.version}`));
-    const list=text('ul','');for(const e of p.exercises){list.append(text('li',`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}card.append(list);for(const e of p.exercises)if(e.adaptation)card.append(text('small',e.name+'：'+e.adaptation));
-    const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));card.append(why);
-    if(p.tracking)card.append(text('p',p.tracking.message));
-    if(p.revision_proposal){const rev=text('div','','plan-revision');rev.append(text('strong','有新的修订草案，当前计划保留'));for(const e of p.revision_proposal.exercises)rev.append(text('p',`${e.name}：${e.sets} × ${e.reps}，预留 ${e.target_rir} 次`));for(const r of p.revision_proposal.reasons)rev.append(text('small',r));card.append(rev);}
+    const drill=text('details','','plan-drill');drill.append(text('summary','查看安排 ↗'));card.append(text('p',p.kind==='train'?`${p.exercises.length} 个动作 · ${p.exercises.reduce((n,e)=>n+e.sets,0)} 组`:p.kind==='rest'?'恢复 / 自由安排':'先核对限制','plan-preview'));
+    const list=text('ul','');for(const e of p.exercises){list.append(text('li',`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}drill.append(list);for(const e of p.exercises)if(e.adaptation)drill.append(text('small',e.name+'：'+e.adaptation));
+    const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));drill.append(why);
+    if(p.tracking)drill.append(text('p',p.tracking.message));
+    if(p.revision_proposal){const rev=text('div','','plan-revision');rev.append(text('strong','有新的修订草案，当前计划保留'));for(const e of p.revision_proposal.exercises)rev.append(text('p',`${e.name}：${e.sets} × ${e.reps}，预留 ${e.target_rir} 次`));for(const r of p.revision_proposal.reasons)rev.append(text('small',r));drill.append(rev);}
     const actions=text('div','','plan-actions');
     for(const [action,label] of [['accepted','接受计划'],['completed','标记已完成'],['skipped','跳过'],['accept_revision','接受修订']]){
       if(action==='accepted'&&(p.status!=='draft'||p.kind==='review'))continue;
@@ -135,7 +167,7 @@ function renderCoach(c,d){
       if(action==='skipped'&&p.status==='skipped')continue;
       const b=text('button',label,'ghost');b.type='button';b.onclick=async()=>{try{await api('/api/coach',{action:'plan_status',date:p.date,version:p.version,status:action});await refreshReport();status('计划状态已保存。');}catch(e){status(e.message,true);}};actions.append(b);
     }
-    card.append(actions);box.append(card);
+    drill.append(actions);card.append(drill);box.append(card);
   }
   if(!upcoming.length)box.append(text('div','点击「更新计划与跟进」生成未来 7 天草案，再确认训练偏好。','empty'));
   $('coach-calibration').replaceChildren();
@@ -174,7 +206,31 @@ $('coach-profile-close').onclick=()=>$('coach-profile-dialog').close();
 $('coach-profile-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/coach',{action:'profile',profile:{goal:$('coach-goal').value,split:$('coach-split').value,shoulder_caution:$('coach-shoulder-caution').checked,shoulder_review_required:$('coach-shoulder-review').checked,schedule_provisional:false,minutes_provisional:false,priority_muscles:[...$('coach-priorities').querySelectorAll('input:checked')].map(e=>e.value),deprioritized_muscles:[...$('coach-depriorities').querySelectorAll('input:checked')].map(e=>e.value),minutes:Number($('coach-minutes').value),weekdays:[...$('coach-weekdays').querySelectorAll('input:checked')].map(e=>Number(e.value)),excluded_muscles:[...$('coach-exclusions').querySelectorAll('input:checked')].map(e=>e.value),excluded_exercises:$('coach-exercises').value.split('\n').map(s=>s.trim()).filter(Boolean)}});await refreshReport();$('coach-profile-dialog').close();status('训练偏好已保存，未来草案已更新。');}catch(e){$('coach-profile-message').textContent=e.message;}};
 function updateRanges(){for(const key of ['energy','soreness'])$(key+'-value').textContent=$(key).value+' / 5';}
 function option(value,label){const o=text('option',label);o.value=value;return o;}
+function renderLoadChart(m){
+  const priority=new Set(coachData?.profile?.priority_muscles||['glutes','lats','upper_back','side_delts']);
+  const rows=m.muscles.filter(v=>priority.has(v.key)||['rear_delts','hamstrings'].includes(v.key));
+  const max=Math.max(1,...rows.flatMap(v=>[v.week_sets,v.previous_sets,v.usual_week||0]));
+  const cap=Math.max(5,Math.ceil(max/5)*5),box=$('load-chart');box.replaceChildren();
+  const cover=m.coverage||[];
+  $('load-coverage').textContent=`读取 ${cover[0]??0}/7 天 · 前周 ${cover[1]??0}/7 天 · 0–${cap} 当量`;
+  for(const r of rows){
+    const row=text('div','','load-row'),head=text('div','','load-label');
+    head.append(text('strong',r.name),text('span',`${fmt(r.week_sets,1)} 组${cover[0]<7?' · 未齐':''}`));row.append(head);
+    const plot=text('div','','load-plot');plot.title=`近7天 ${r.week_sets}（主练 ${r.direct_sets} / 间接 ${r.indirect_sets}）；前7天 ${r.previous_sets}；历史 ${r.usual_week??'不足'} 组当量`;
+    const now=text('div','','load-track load-now');now.setAttribute('role','img');
+    now.setAttribute('aria-label',`${r.name}近七天主练 ${r.direct_sets} 组，间接 ${r.indirect_sets} 当量，前七天 ${r.previous_sets}，历史周量 ${r.usual_week??'不足'}`);
+    for(const [value,cls] of [[r.direct_sets,'bar-direct'],[r.indirect_sets,'bar-indirect']]){const fill=text('i','',cls);fill.style.width=(Math.max(0,value)/cap*100)+'%';now.append(fill);}
+    if(r.week_sets===0&&cover[0]===7)now.append(text('i','','bar-zero'));
+    const previous=text('div','','load-track load-before'),fill=text('i','','bar-previous');fill.style.width=(Math.max(0,r.previous_sets)/cap*100)+'%';previous.append(fill);
+    plot.append(now,previous);
+    if(r.usual_week!=null){const marker=text('i','','bar-marker');marker.style.left=(Math.max(0,r.usual_week)/cap*100)+'%';marker.title=`历史周量 ${r.usual_week} 当量`;plot.append(marker);}
+    row.append(plot);box.append(row);
+  }
+  if(!rows.length)box.append(text('p','暂无可归类的肌群数据，先同步或核对动作归属。','muted'));
+  $('load-summary').textContent=cover[0]<7||cover[1]<7?'读取尚未齐全：条形只表示已同步的记录，缺失日期不能当作零负荷。':rows.every(r=>r.week_sets===0)?'近 7 天未记录这些肌群的正式组；浅色条保留前 7 天的训练分布。低负荷不等于已经恢复。':'实色＋浅绿为本周主练与间接参与；灰条对照前周，虚线标记个人历史。';
+}
 function renderMuscles(m){
+  renderLoadChart(m);
   $('half-life').value=String(m.half_life_days);
   const body=$('muscle-rows');body.replaceChildren();
   for(const row of m.muscles){
