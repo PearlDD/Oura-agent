@@ -20,7 +20,7 @@ def main():
     if not result['day_context']['synced']:
         missing.append('本日训记记录未成功读取，不能据此判断是否休息。')
     if result['recovery'].get('sleep_hours') is None:
-        missing.append('本日 Oura 主睡眠尚未上传或同步，请先在 Oura App 同步戒指。')
+        missing.append('本日 Oura 只有睡眠片段，完整主睡眠待同步；不会将片段当作整晚睡眠。' if result['recovery'].get('sleep_status')=='pending_main' else '本日 Oura 主睡眠尚未上传或同步，请先在 Oura App 同步戒指。')
     warnings = failures + missing
     content = app.markdown(result)
     if warnings:

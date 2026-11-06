@@ -53,11 +53,11 @@ class AppTests(unittest.TestCase):
 
     def test_baseline_excludes_current_and_future_and_requires_seven_nights(self):
         anchor = dt.date(2026, 11, 5)
-        rows = [{'day': (anchor - dt.timedelta(days=i)).isoformat(), 'total_sleep_duration': 8*3600,
+        rows = [{'day': (anchor - dt.timedelta(days=i)).isoformat(), 'type': 'long_sleep', 'total_sleep_duration': 8*3600,
                  'average_hrv': 50, 'lowest_heart_rate': 55} for i in range(1, 8)]
-        rows += [{'day': anchor.isoformat(), 'total_sleep_duration': 6*3600},
-                 {'day': anchor.isoformat(), 'total_sleep_duration': 20*60},
-                 {'day': (anchor+dt.timedelta(days=1)).isoformat(), 'total_sleep_duration': 12*3600}]
+        rows += [{'day': anchor.isoformat(), 'type': 'long_sleep', 'total_sleep_duration': 6*3600},
+                 {'day': anchor.isoformat(), 'type': 'long_sleep', 'total_sleep_duration': 20*60},
+                 {'day': (anchor+dt.timedelta(days=1)).isoformat(), 'type': 'long_sleep', 'total_sleep_duration': 12*3600}]
         app.save(app.DATA/'oura/sleep.json', {'data': rows})
         r = app.report(anchor.isoformat())
         self.assertEqual(r['baseline']['sleep_hours'], {'n': 7, 'value': 8})
@@ -72,6 +72,36 @@ class AppTests(unittest.TestCase):
         self.assertEqual(r['coverage'], 0)
         self.assertTrue(any('未读取日期不能视为休息日' in x for x in r['observations']))
         self.assertIsNone(r['recovery'].get('hrv'))
+
+    def test_pending_sleep_fragment_is_not_main_sleep_or_recovery_input(self):
+        app.save(app.DATA/'oura/sleep.json',{'data':[{'day':'2026-11-06','type':'sleep',
+            'total_sleep_duration':3810,'average_hrv':32,'lowest_heart_rate':66}]})
+        r=app.report('2026-11-06')
+        self.assertEqual(r['recovery']['sleep_status'],'pending_main')
+        self.assertIsNone(r['recovery']['sleep_hours'])
+        self.assertIsNone(r['recovery']['hrv'])
+        self.assertIsNone(r['recovery']['rhr'])
+        self.assertEqual(r['trends']['sleep_hours']['recent']['n'],0)
+        self.assertEqual(app.report('2026-11-07')['baseline']['sleep_hours']['n'],0)
+        self.assertTrue(any('片段' in n for n in r['observations']))
+
+    def test_main_sleep_can_be_short_and_does_not_select_a_longer_ordinary_fragment(self):
+        app.save(app.DATA/'oura/sleep.json',{'data':[
+            {'day':'2026-11-06','type':'long_sleep','total_sleep_duration':3600,'average_hrv':40},
+            {'day':'2026-11-06','type':'sleep','total_sleep_duration':7200,'average_hrv':20}]})
+        r=app.recovery_data()['2026-11-06']
+        self.assertEqual(r['sleep_status'],'main_record')
+        self.assertEqual(r['sleep_hours'],1)
+        self.assertEqual(r['hrv'],40)
+
+    def test_fragment_then_complete_record_updates_without_stale_values(self):
+        p=app.DATA/'oura/sleep.json'
+        app.save(p,{'data':[{'day':'2026-11-06','type':'sleep','total_sleep_duration':3810}]})
+        self.assertIsNone(app.recovery_data()['2026-11-06']['sleep_hours'])
+        app.save(p,{'data':[{'day':'2026-11-06','type':'long_sleep','total_sleep_duration':27540}]})
+        r=app.recovery_data()['2026-11-06']
+        self.assertEqual(r['sleep_hours'],7.65)
+        self.assertNotIn('partial_sleep_hours',r)
 
     def test_day_modes_distinguish_plan_record_and_missing_sync(self):
         d = '2026-11-05'
@@ -111,7 +141,7 @@ class AppTests(unittest.TestCase):
 
     def test_recovery_report_and_export_respect_plan_without_claiming_full_recovery(self):
         app.save(app.DATA/'xunji/2026-11-05.json', {'data': {'res': {'trains': []}}})
-        app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'total_sleep_duration': 28800}]})
+        app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'type': 'long_sleep', 'total_sleep_duration': 28800}]})
         app.update_settings({'oura_tokens': {'access_token': 'test'}})
         app.save_checkin({'date': '2026-11-05', 'energy': 3, 'soreness': 0, 'plan': 'rest'})
         r = app.report('2026-11-05')
@@ -156,7 +186,7 @@ class AppTests(unittest.TestCase):
     def test_ai_sends_summary_not_secret_or_freeform_note(self):
         app.update_settings({'xunji_key': 'private-xunji-key', 'openai_key': 'test-openai-key', 'openai_model': 'test-model'})
         app.save(app.DATA/'checkins.json', {'2026-11-05': {'energy': 3, 'note': 'PRIVATE NOTE'}})
-        app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'total_sleep_duration': 3600*8}]})
+        app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'type': 'long_sleep', 'total_sleep_duration': 3600*8}]})
         with patch.object(app, 'request_json', return_value={'output': [{'content': [{'type': 'output_text', 'text': '测试报告'}]}]}) as req:
             result = app.ai_report('2026-11-05')
         payload = req.call_args.args[1]

@@ -37,7 +37,7 @@ async function refreshReport() {
   for(const [id,key] of Object.entries(fields)) {
     $(id).textContent=fmt(r.recovery[key], id==='sleep'?1:0);
     const b=r.baseline[key];
-    $(id+'-baseline').textContent=b.value==null?`基线样本 ${b.n}/7 晚`:`28 天中位数 ${fmt(b.value,id==='sleep'?1:0)} · ${b.n} 晚`;
+    $(id+'-baseline').textContent=r.recovery.sleep_status==='pending_main'?'完整主睡眠待同步 · 片段不参与分析':b.value==null?`基线样本 ${b.n}/7 晚`:`28 天中位数 ${fmt(b.value,id==='sleep'?1:0)} · ${b.n} 晚`;
   }
   $('sets').textContent=r.week.sets;
   $('week-meta').textContent=`${r.week.sessions} 次记录 · 已读取 ${r.coverage}/7 天`;

@@ -280,14 +280,29 @@ def totals(sessions):
 def recovery_data():
     merged = {}
     for collection in ('daily_sleep', 'daily_readiness', 'sleep'):
-        data = load(DATA / 'oura' / (collection + '.json'), {'data': []})['data']
+        cached = load(DATA / 'oura' / (collection + '.json'), {'data': []})
+        data = cached['data']
         if collection == 'sleep':
-            longest = {}
+            grouped = {}
             for r in data:
                 d = r.get('day')
-                if d and (number(r.get('total_sleep_duration')) or 0) > (number(longest.get(d, {}).get('total_sleep_duration')) or -1):
-                    longest[d] = r
-            data = list(longest.values())
+                if d:grouped.setdefault(d, []).append(r)
+            selected=[]
+            for d, rows in grouped.items():
+                # An unfinished ordinary sleep record must never stand in for the main night.
+                main=[r for r in rows if r.get('type')=='long_sleep']
+                # Legacy/imported rows without type are usable only with a daily sleep summary.
+                if not main and merged.get(d,{}).get('sleep_score') is not None:
+                    main=[r for r in rows if not r.get('type')]
+                dest=merged.setdefault(d,{'date':d})
+                dest['sleep_status']='main_record' if main else 'pending_main'
+                dest['sleep_synced_at']=cached.get('fetched_at')
+                if main:
+                    selected.append(max(main,key=lambda r:number(r.get('total_sleep_duration')) or 0))
+                else:
+                    partial=max((number(r.get('total_sleep_duration')) or 0 for r in rows),default=0)
+                    dest.update(sleep_hours=None,hrv=None,rhr=None,partial_sleep_hours=round(partial/3600,2))
+            data=selected
         for r in data:
             d = r.get('day')
             if not d:
@@ -301,7 +316,8 @@ def recovery_data():
                 duration = number(r.get('total_sleep_duration'))
                 dest.update({'sleep_hours': round(duration / 3600, 2) if duration is not None else None,
                              'hrv': number(r.get('average_hrv')),
-                             'rhr': number(r.get('lowest_heart_rate'))})
+                             'rhr': number(r.get('lowest_heart_rate')),
+                             'bedtime_start':r.get('bedtime_start'),'bedtime_end':r.get('bedtime_end')})
     return merged
 
 
@@ -505,7 +521,7 @@ def report(d):
         notes.append(f'本日主睡眠 {current["sleep_hours"]:.1f} 小时。' +
                      (f'相对过去 28 天中位数变化 {(current["sleep_hours"]-b)*60:+.0f} 分钟。' if b is not None else '历史样本不足 7 晚，暂不比较个人基线。'))
     else:
-        notes.append('本日 Oura 主睡眠数据尚未同步，暂不能给出联合恢复分析。')
+        notes.append('本日 Oura 仅有未识别为主睡眠的片段，等待完整主睡眠；片段时长和心率不用于整晚恢复分析。' if current.get('sleep_status')=='pending_main' else '本日 Oura 主睡眠数据尚未同步，暂不能给出联合恢复分析。')
     for metric, label, unit in (('hrv', 'HRV', 'ms'), ('rhr', '夜间最低静息心率', 'bpm')):
         v, b = current.get(metric), baselines[metric]['value']
         if v is not None:
@@ -579,7 +595,7 @@ def ai_report(d):
     if not s.get('openai_key') or not s.get('openai_model'):
         raise AppError('请先在设置中填写 OpenAI API Key 和你可用的模型 ID。')
     r = report(d)
-    if not r['last_sessions'] and len(r['recovery']) <= 1:
+    if not r['last_sessions'] and all(r['recovery'].get(k) is None for k in ('sleep_hours','hrv','rhr','sleep_score','readiness')):
         raise AppError('请先同步训练或 Oura 数据，再生成 AI 解读。')
     summary = {k: v for k, v in r.items() if k not in ('checkin', 'last_sessions')}
     summary['muscle_load'] = {k: v for k, v in r['muscle_load'].items() if k not in ('exercises', 'groups', 'kinds')}
