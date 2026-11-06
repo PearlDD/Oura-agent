@@ -33,6 +33,8 @@ async function refreshReport() {
   const d=selected();
   const r=await api('/api/report?date='+d);
   if(selected()!==d)return;
+  renderDecision(r.decision);
+  renderHealth(r.health_observations,d);
   const fields={sleep:'sleep_hours',hrv:'hrv',rhr:'rhr'};
   for(const [id,key] of Object.entries(fields)) {
     $(id).textContent=fmt(r.recovery[key], id==='sleep'?1:0);
@@ -91,6 +93,29 @@ async function refreshReport() {
   $('ai-result').textContent=ai.text||'';
   $('ai-meta').textContent=ai.generated_at?`已保存的解读 · ${ai.model} · ${new Date(ai.generated_at*1000).toLocaleString('zh-CN')}（同步后可重新生成）`:'';
 }
+function renderDecision(record){
+  const labels={keep:'保持原安排',reduce:'减量',rest:'休息',light:'轻量活动',clarify:'先补信息'};
+  const a=record?.analysis;
+  $('decision-verdict').textContent=record?.stale?'待重新分析':a?labels[a.verdict]:'等待分析';
+  $('decision-headline').textContent=a?.headline||'尚未生成本日 AI 决策';
+  $('decision-rationale').textContent=a?.rationale||'同步和规则计划更新不会冒充 AI 分析。聊天 Agent 生成后会保存在这里，也可以使用下方已配置的 API。';
+  $('decision-meta').textContent=record?`${record.stale?'数据或计划已变化，以下为历史结论；修订暂不可用。 ':''}${record.source} · ${record.created_at} · 置信度 ${a.confidence}`:'';
+  $('decision-evidence').replaceChildren(...(a?.evidence||[]).map(e=>text('li',e.statement)));
+  $('decision-options').replaceChildren(...(a?.options||[]).map(o=>text('p',`${labels[o.mode]} · ${o.when}：${o.details}`)));
+  const box=$('decision-details');box.replaceChildren();
+  for(const [label,key] of [['肌群负荷复核','muscle_review'],['短期调整','short_term'],['长期计划','long_term'],['待确认','questions']]){
+    if(a?.[key]?.length){const ul=text('ul','');ul.append(...a[key].map(v=>text('li',v)));box.append(text('h3',label),ul);}
+  }
+  $('decision-apply').hidden=!a?.adjustment||record.stale;
+}
+function renderHealth(h,d){
+  const row=h.history.find(v=>v.date===d)||{};
+  if(document.activeElement?.closest('#health-form'))return;
+  $('health-strain').value=row.strain||'unknown';$('health-cycle').value=row.cycle||'unknown';$('health-symptoms').value=row.symptoms||'';
+  $('health-history').textContent=h.history.map(v=>`${v.date} · strain ${v.strain} · ${v.symptoms||'症状未填'}`).join('；');
+}
+$('health-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/health',{date:selected(),strain:$('health-strain').value,cycle:$('health-cycle').value,symptoms:$('health-symptoms').value});await refreshReport();status('身体背景已保存；需要重新生成 AI 分析。');}catch(e){status(e.message,true);}};
+$('decision-apply').onclick=async()=>{try{await api('/api/decision/apply',{date:selected()});await refreshReport();status('已提交修订提案，请在计划卡片核对后决定是否接受。');}catch(e){status(e.message,true);}};
 function renderCoach(c,d){
   $('coach-profile-state').textContent=c.profile.confirmed?(c.profile.schedule_provisional||c.profile.minutes_provisional?'安排待确认':'偏好已确认'):'偏好待确认';
   const labels={draft:'草案',accepted:'已接受',completed:'已手动标记完成',skipped:'已跳过'};
@@ -217,7 +242,7 @@ $('ai-generate').onclick=async()=>{
   if(!state.ai){$('settings-dialog').showModal();$('settings-status').textContent='请先填写 OpenAI API Key 和模型 ID。';return;}
   if(!$('ai-consent').checked){status('请先勾选 AI 摘要发送授权。',true);return;}
   const b=$('ai-generate'),d=selected();b.disabled=true;b.textContent='正在生成…';
-  try{const r=await api('/api/ai',{date:d,consent:true});if(d===selected()){$('ai-result').textContent=r.text;$('ai-meta').textContent='刚刚生成 · '+r.model;}status('AI 日报已保存。');}
+  try{const r=await api('/api/ai',{date:d,consent:true});if(d===selected()){$('ai-result').textContent=r.text;$('ai-meta').textContent='刚刚生成 · '+r.model;}await refreshReport();status('AI 决策已保存。');}
   catch(e){status(e.message,true);}finally{b.disabled=false;b.textContent='生成 AI 日报 ↗';}
 };
 (async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));},1800);}catch(e){status('本地服务连接失败：'+e.message,true);}})();

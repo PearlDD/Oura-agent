@@ -179,7 +179,7 @@ class AppTests(unittest.TestCase):
         with patch.object(app, 'oura_token', return_value='test'), patch.object(app, 'request_json', side_effect=[
             {'data': [{'day': '2026-11-04'}], 'next_token': 'page2'},
             {'data': [{'day': '2026-11-05'}], 'next_token': None},
-            {'data': [], 'next_token': None}, {'data': [], 'next_token': None}]):
+            {'data': [], 'next_token': None}, {'data': [], 'next_token': None}, {'data': [], 'next_token': None}]):
             app.fetch_oura('2026-11-04', '2026-11-06')
         self.assertEqual(len(app.load(app.DATA/'oura/sleep.json')['data']), 2)
 
@@ -187,13 +187,16 @@ class AppTests(unittest.TestCase):
         app.update_settings({'xunji_key': 'private-xunji-key', 'openai_key': 'test-openai-key', 'openai_model': 'test-model'})
         app.save(app.DATA/'checkins.json', {'2026-11-05': {'energy': 3, 'note': 'PRIVATE NOTE'}})
         app.save(app.DATA/'oura/sleep.json', {'data': [{'day': '2026-11-05', 'type': 'long_sleep', 'total_sleep_duration': 3600*8}]})
-        with patch.object(app, 'request_json', return_value={'output': [{'content': [{'type': 'output_text', 'text': '测试报告'}]}]}) as req:
+        import json
+        from test_decision import sample
+        with patch.object(app, 'request_json', return_value={'output': [{'content': [{'type': 'output_text', 'text': json.dumps(sample())}]}]}) as req:
             result = app.ai_report('2026-11-05')
         payload = req.call_args.args[1]
         self.assertFalse(payload['store'])
         self.assertNotIn('PRIVATE NOTE', payload['input'])
         self.assertNotIn('private-xunji-key', payload['input'])
-        self.assertEqual(result['text'], '测试报告')
+        self.assertIn('保持今天的休息安排', result['text'])
+        self.assertEqual(payload['text']['format']['type'],'json_schema')
 
 
 if __name__ == '__main__':

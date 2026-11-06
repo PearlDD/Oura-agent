@@ -333,6 +333,9 @@ def run(d,sessions,fetched,config,p,feedback,checks,state):
         target=(asof+dt.timedelta(days=offset)).isoformat()
         draft=make_plan(target,sessions,fetched,config,p,feedback,checks,state['calibrations'],forecast)
         old=state['plans'].get(target)
+        if old and old.get('revision_proposal',{}).get('origin')=='agent_analysis':
+            project(old)
+            continue
         if old and old['status']!='draft':
             # Preserve accepted plans. New information is a separate proposal.
             if old['exercises']!=draft['exercises'] or old['kind']!=draft['kind']:

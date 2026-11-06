@@ -1,79 +1,58 @@
-# Oura-agent / Pearl's Health Tracker
+# IRON / OURA · Personal Training Agent
 
-AI agent for Pearl's Oura ring: a local, personal lifting and recovery journal combining Xunji workout records with Oura sleep and recovery data.
+本机单用户训练与恢复工具，结合训记训练记录和 Oura 指标，提供中文日报、实验性肌群负荷观察、待确认训练计划与实际 AI 分析。Python 3.10+，零第三方依赖。
 
-## Public website
-
-- About: https://pearldd.github.io/Oura-agent/
-- Privacy Policy: https://pearldd.github.io/Oura-agent/privacy.html
-- Terms of Service: https://pearldd.github.io/Oura-agent/terms.html
-
-The public site contains product information and policies only. It does not run the private dashboard or store personal health data.
-
-## Run locally
-
-Python 3.10+; no third-party dependencies required. Double-click `启动.command` on macOS, or run:
+## 启动与连接
 
 ```sh
 python3 launch.py
 ```
 
-Open http://127.0.0.1:8765 . Keep the local server running while using the dashboard. Connect your own accounts under **连接与设置**.
+打开 http://127.0.0.1:8765 。macOS 也可双击 `启动.command`。在「连接与设置」输入自己的训记训练 API Key，以及 Oura Client ID / Client Secret；Oura 回调白名单必须完全匹配 `http://localhost:8765/oauth/callback`。仅申请 daily 读取权限。
 
-## Oura registration
+公共介绍和政策页面由 GitHub Pages 的 `docs/` 提供，不承载私人面板或授权回调：
 
-Create an OAuth application in the Oura developer portal. Use the public website and policy URLs above. Register this exact local redirect URI:
+- [介绍](https://pearldd.github.io/Oura-agent/)
+- [隐私政策](https://pearldd.github.io/Oura-agent/privacy.html)
+- [使用条款](https://pearldd.github.io/Oura-agent/terms.html)
 
-```text
-http://localhost:8765/oauth/callback
-```
+## 分析与计划
 
-Enter your Client ID and Client Secret into the local dashboard, then authorize Oura. The MVP requests the `daily` scope. Oura account/membership requirements apply. GitHub Pages is not the OAuth callback server; the local Python app handles the callback.
+- 只读同步最近 7/28 天训记及 Oura sleep、daily_sleep、daily_readiness、daily_activity；保留恢复 contributors、温度偏移、呼吸、活动背景。
+- 只计已完成正式组，区分热身、缺值、未知动作与辅助/活动度；个人恢复基线采用此前 28 天中位数，至少 7 个有效夜晚。
+- 只用主睡眠参与恢复分析，普通睡眠片段显示待同步，避免把未完成的一夜误报为极短睡眠。
+- 实验性肌群模型分别展示主练组、间接组当量、历史周量及残余负荷假设区间，不测量生理恢复百分比。
+- 按偏好与历史动作生成未来七天草案，保留已接受计划，新修订另列提案；日志匹配不代替用户确认完成。
+- 反馈校准预测主观局部疲劳，需足够反馈/RPE 和留出验证改善才启用，不能声称已经完成个人拟合。
+- 首页 AI 决策包含今日结论、证据、保持/减量/休息/轻量活动的条件、肌群复核及短长期调整。来源、时间和数据变化可核对；规则草案不冒充 AI。
+- 用户确认的症状、strain 等级和周期背景单独保留日期与来源；当前同步不返回周期阶段或 Symptom Radar 等级，不从温度猜周期，缺失不当作正常。
 
-## Features
+详见 [肌群模型说明](肌群模型说明.md) 与 [教练 Agent 说明](教练Agent说明.md)。
 
-- Read-only Xunji v2 sync, 7 or 28 days; no source-account writes.
-- Completed working sets, kg/lb normalization, recorded RPE, supersets and drop sets.
-- Same-exercise comparisons, daily journal and Markdown export.
-- Oura OAuth with PKCE/state, refresh-token rotation and pagination.
-- Recovery baselines from up to 28 prior days, requiring at least 7 valid nights.
-- Optional OpenAI Responses API interpretation; configure your own key/model, opt in and generate manually. Basic reports do not require AI.
-
-## Private runtime data
-
-Runtime files are stored outside this source folder by default, in `work/iron-oura-data/` two levels above it. Set `IRON_DATA_DIR` to override. They contain health records and secrets; do not publish them. Files have restricted filesystem permissions but are not encrypted by the app. Deleting local tokens does not revoke provider access; use provider account controls.
-
-Default timezone: `America/New_York` (`IRON_TIMEZONE` override). Default port: `8765` (`IRON_PORT` override; update your Oura redirect URI accordingly). The server binds only to 127.0.0.1. This is a single-user local prototype, not a production multi-user service. No unattended scheduler is configured.
-
-## Tests
+## 日报和实际 AI 分析
 
 ```sh
-python3 -m unittest -v
+python3 morning_report.py
+python3 morning_report.py --cached
+```
+
+脚本无需网页服务器常驻。同步后导出 Markdown 和私有分析上下文。聊天中的 Agent 可依据 `decision.py` 的 PROMPT / SCHEMA 进行推理，用 `agent_decision.py` 校验并保存决策，再缓存导出日报。保存时检查上下文指纹，数据或主计划变化后旧结论显示为历史，禁止采用过期修订。保守修订需用户核对，只可减少原动作组次或增加预留次数，不能新增重量。
+
+此代码不自行安装定时任务。Codex 中已配置的自动化可每天调用上述流程，具体时间以自动化设置为准。电脑和运行环境需可用。
+
+可选网页 AI 按钮需要自己的 OpenAI API Key 和可用模型 ID；明确授权后，通过 Responses API 发送近 28 天训练、恢复、活动、偏好、计划、反馈和所填症状/周期背景，返回结构化决策。`store:false` 不代表零数据保留，API 可能收费。自由文本 check-in 备注及密钥不进入模型输入；身体背景症状文字会在该授权范围内发送。
+
+## 本机数据与边界
+
+默认运行数据位于源目录上两级的 `work/iron-oura-data/`，可用 `IRON_DATA_DIR` 指定。目录权限 700、文件 600，未额外加密。密钥、原始记录和个人报告不得提交 GitHub；删除本机令牌不等于撤销提供商授权。服务器只绑定 127.0.0.1，有 Host、CSRF 和 CSP 校验，不应直接暴露公网。
+
+默认时区 America/New_York（`IRON_TIMEZONE`），端口 8765（`IRON_PORT`；更改后更新回调白名单）。Oura day 与训记日期直接对齐，旅行需注意日期归属。身体背景与计划均可更正；建议依赖已读取记录与明确反馈，不诊断疾病、不从单次 HRV、分数或停练天数断定恢复。
+
+## 验证
+
+```sh
+python3 -m unittest -q
 node --check static/app.js
 ```
 
-Tests use temporary directories and mocked provider responses. Real Oura authorization and real OpenAI generation require your own configuration. No credentials, personal workout logs or private runtime data are included in this repository.
-
-## Public site deployment
-
-GitHub Pages serves `docs/` on the `main` branch. Static public pages need no build dependencies. See `docs/privacy.html` and `docs/terms.html` for current data practices and use terms.
-
-## 训练日与恢复观察模式
-
-可按日期保存「训练／休息／未决定」计划。计划不视为已完成训练；本日有记录时保留实际训练回顾，未同步日期不会被当作休息日。休息或停练观察侧重恢复趋势和最近训练回顾，不凭间隔天数判断充分恢复。趋势分别取最近 7 晚与此前 7 晚的中位数，每段至少需 3 个有效夜晚。日报导出和可选 AI 摘要包含当日计划与模式；更改计划后需手动重新生成已缓存的 AI 日报。
-
-## 晨报脚本
-
-运行 `python3 morning_report.py` 可只读同步最近 7 天并生成日期命名的 Markdown 晨报，保存在项目上两级目录的 `outputs/晨报/`。`--cached` 仅使用缓存。同步错误和当天缺失数据会写入报告；网络同步失败时退出码为非零。脚本不调用额外模型 API、不需要网页服务运行。可通过 Codex 的本聊天定时任务调用；脚本自身不安装系统计划任务。当前工作区已配置每天纽约时间上午 11 点执行的 Codex 晨报任务，电脑需开启并运行 Codex。
-
-## 实验性肌群负荷模型
-
-新增按肌群的主练/间接组当量、周量比较、可调衰减的残余负荷估计区间、动作归属编辑和每日分肌群酸痛。辅助/活动度单列，未知动作不猜测；RPE 缺失时显示假设区间。它不是经验证的疲劳测量或恢复百分比。详细公式、限制及校准方法见 [肌群模型说明.md](肌群模型说明.md)。模型已接入导出与晨报。
-
-## 反馈驱动的个人教练 Agent
-
-新增局部疲劳/训练表现反馈、每肌群时间留出验证的参数校准、未来 7 天计划草案、目标/可训练日/动作限制设置和计划接受/完成/跳过状态。计划会对照实际动作与组数跟进；接受后的变化另列修订。稀疏反馈不冒充已学会个人恢复规律。每日晨报和手动同步运行闭环。详情见 [教练Agent说明.md](教练Agent说明.md)。
-
-## 睡眠数据就绪检查
-
-普通 `sleep` 片段不会被当成完整主睡眠，暂显示「待同步」，片段时长及心率不进入恢复基线和趋势。优先使用 `long_sleep` 主睡眠记录；无类型的旧导入数据仅在存在当天睡眠日汇总时兼容。实际较短但已识别的主睡眠不会被时长阈值删除。当前晨报已调整到纽约时间每天 11 点。
+测试使用临时目录和模拟响应，不触碰私人缓存。源码与公共站点不包含用户密钥或健康记录。

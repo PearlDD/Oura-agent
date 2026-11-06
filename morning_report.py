@@ -15,6 +15,9 @@ def main():
     d = app.today().isoformat()
     app.run_coach(d)
     result = app.report(d)
+    ctx=app.analysis_context(d,result)
+    context_path=app.DATA/'agent-context'/(d+'.json')
+    app.save(context_path,{'data_hash':app.decision.fingerprint(ctx),'context':ctx})
     failures = [] if args.cached else list(app.JOB.get('errors', []))
     missing = []
     if not result['day_context']['synced']:
@@ -31,7 +34,7 @@ def main():
     target.write_text(content)
     target.chmod(0o600)
     print(json.dumps({'date': d, 'report_path': str(target), 'mode': result['day_context']['label'],
-                      'warnings': warnings, 'cached_only': args.cached}, ensure_ascii=False))
+                      'analysis_context_path':str(context_path),'data_hash':app.decision.fingerprint(ctx),'warnings': warnings, 'cached_only': args.cached}, ensure_ascii=False))
     if failures:
         raise SystemExit(1)
 
