@@ -12,7 +12,13 @@ function text(tag, value, className) {const el=document.createElement(tag);el.te
 function fmt(v, digits=0) {return v == null ? '—' : Number(v).toFixed(digits);}
 function selected() {return $('report-date').value || state.today;}
 async function refreshStatus() {
+  const previousProvider=state?.ai_provider;
   state = await api('/api/status');
+  if(previousProvider&&previousProvider!==state.ai_provider){$('chat-consent').checked=false;$('ai-consent').checked=false;}
+  const recipient=state.ai_provider==='gemini'?'Google / Gemini':'OpenAI';
+  $('ai-consent-copy').textContent=`允许将近28天训练、恢复、活动、肌群估计、偏好、计划、疲劳、症状、strain及周期背景发送至 ${recipient}。`;
+  $('chat-consent-copy').textContent=`同意将本次问题、近期对话及所选报告背景（含训练、恢复、症状和周期）发送至 ${recipient}。`;
+  $('chat-data-note').textContent=state.ai_provider==='gemini'?'对话保存在本机，聊天不自动改计划。Gemini API 可能收费，数据处理适用 Google 付费服务条款。':'对话保存在本机，聊天不自动改计划。API 可能收费，store:false 不等于零数据保留。';
   if (!$('report-date').value) {$('report-date').value=state.today; $('report-date').max=state.today;}
   $('timezone').textContent=state.timezone;
   for (const [name,label] of [['xunji','已配置'],['oura','已授权']]) {
@@ -277,14 +283,21 @@ $('muscle-form').onsubmit=async e=>{e.preventDefault();try{
 $('mapping-reset').onclick=async()=>{try{await api('/api/muscles',{name:$('mapping-exercise').value,reset:true});await refreshReport();renderMapping();$('mapping-status').textContent='已恢复默认归属。';}catch(e){$('mapping-status').textContent=e.message;}};
 $('save-half-life').onclick=async()=>{try{await api('/api/muscles',{half_life_days:Number($('half-life').value)});await refreshReport();status('衰减假设已保存并重算；它不是实际恢复时间。');}catch(e){status(e.message,true);}};
 async function saveSettings(){
-  const fields={'xunji_key':'xunji-key','oura_client_id':'oura-client','oura_client_secret':'oura-secret','openai_key':'openai-key','openai_model':'openai-model'};
+  const fields={'xunji_key':'xunji-key','oura_client_id':'oura-client','oura_client_secret':'oura-secret','openai_key':'openai-key','openai_model':'openai-model','gemini_key':'gemini-key','gemini_model':'gemini-model'};
   const body={};for(const [k,id] of Object.entries(fields))if($(id).value.trim())body[k]=$(id).value.trim();
+  body.ai_provider=$('ai-provider').value;body.gemini_paid_confirmed=$('gemini-paid').checked;
   await api('/api/settings',body);
-  for(const id of ['xunji-key','oura-secret','openai-key'])$(id).value='';
+  for(const id of ['xunji-key','oura-secret','openai-key','gemini-key'])$(id).value='';
   $('settings-status').textContent='设置已保存在本机。';
-  await refreshStatus();
+  $('chat-consent').checked=false;$('ai-consent').checked=false;
+  await refreshStatus();if(!$('chat-drawer').hidden)await loadChat();
 }
-$('settings-button').onclick=()=>{$('openai-model').value=state?.model||'';$('settings-dialog').showModal();};
+function renderProviderSettings(){const g=$('ai-provider').value==='gemini';$('gemini-fields').hidden=!g;$('openai-fields').hidden=g;}
+$('ai-provider').onchange=renderProviderSettings;
+function openSettings(){
+  $('ai-provider').value=state?.ai_provider||'gemini';$('openai-model').value=state?.ai_models?.openai||'';$('gemini-model').value=state?.ai_models?.gemini||'';$('gemini-paid').checked=!!state?.gemini_paid_confirmed;renderProviderSettings();$('settings-dialog').showModal();
+}
+$('settings-button').onclick=openSettings;
 $('settings-close').onclick=()=>$('settings-dialog').close();
 $('settings-form').onsubmit=async e=>{e.preventDefault();try{await saveSettings();}catch(e){$('settings-status').textContent=e.message;}};
 $('connect-oura').onclick=async()=>{const b=$('connect-oura');b.disabled=true;try{await saveSettings();const r=await api('/api/oura/connect',{});window.location.assign(r.url);}catch(e){$('settings-status').textContent=e.message;b.disabled=false;}};
@@ -295,10 +308,10 @@ $('note').oninput=()=>{dirtyCheckin=true;};
 $('daily-plan').onchange=()=>{dirtyCheckin=true;};
 $('checkin-form').onsubmit=async e=>{e.preventDefault();const d=selected();try{await api('/api/checkin',{date:d,energy:Number($('energy').value),soreness:Number($('soreness').value),note:$('note').value,plan:$('daily-plan').value,muscle_soreness:localSoreness()});if(d===selected()){dirtyCheckin=false;await refreshReport();}status('当日计划与感受已保存，日报已更新。');}catch(e){status(e.message,true);}};
 $('ai-generate').onclick=async()=>{
-  if(!state.ai){$('settings-dialog').showModal();$('settings-status').textContent='请先填写 OpenAI API Key 和模型 ID。';return;}
+  if(!state.ai){openSettings();$('settings-status').textContent='请先配置所选 AI 提供商的密钥、模型与必要确认。';return;}
   if(!$('ai-consent').checked){status('请先勾选 AI 摘要发送授权。',true);return;}
   const b=$('ai-generate'),d=selected();b.disabled=true;b.textContent='正在生成…';
-  try{const r=await api('/api/ai',{date:d,consent:true});if(d===selected()){$('ai-result').textContent=r.text;$('ai-meta').textContent='刚刚生成 · '+r.model;}await refreshReport();status('AI 决策已保存。');}
+  try{const r=await api('/api/ai',{date:d,consent:true,provider:state.ai_provider});if(d===selected()){$('ai-result').textContent=r.text;$('ai-meta').textContent='刚刚生成 · '+r.model;}await refreshReport();status('AI 决策已保存。');}
   catch(e){status(e.message,true);}finally{b.disabled=false;b.textContent='生成 AI 日报 ↗';}
 };
 let chatState=null,chatDate=null,chatLoading=false,chatSending=false;
@@ -306,7 +319,7 @@ const chatDrafts={};
 function chatStatus(message,error=false){$('chat-status').textContent=message;$('chat-status').classList.toggle('error',error);}
 function renderChat(c){
   chatState=c;$('chat-context-date').textContent='正在讨论 '+c.date+' 的报告';
-  $('chat-model').textContent=c.ready?`${c.model} · 最近 6 轮作为对话上下文`:'请先在连接与设置配置模型和 API Key';
+  $('chat-model').textContent=c.ready?`${c.provider_label} · ${c.model} · 最近6轮对话`:c.configuration_error||'请先在连接与设置配置模型和 API Key';
   const box=$('chat-messages');box.replaceChildren();
   if(!c.messages.length){const empty=text('div','','chat-welcome');empty.append(text('strong','看不懂哪一处？直接问。'),text('p','我会结合这份报告和当前计划解释。你的问题可以继续追问；这里的对话与 Codex 聊天分别保存。'));box.append(empty);}
   for(const m of c.messages){const bubble=text('article','',m.role==='user'?'chat-bubble chat-user':'chat-bubble chat-agent');bubble.append(text('small',m.role==='user'?'你':'训练 Agent'),text('p',m.text));if(m.role==='assistant'&&m.context_changed)bubble.append(text('small','回答后数据已变化，以新提问时的背景为准。','chat-old'));box.append(bubble);}
@@ -341,7 +354,7 @@ $('chat-form').onsubmit=async e=>{
   if(!message){chatStatus('先输入一个问题。',true);return;}
   if(!$('chat-consent').checked){chatStatus('请先勾选本次聊天的数据发送授权。',true);return;}
   chatSending=true;$('chat-send').disabled=true;$('chat-new').disabled=true;chatStatus('Agent 正在结合报告思考…');
-  try{const c=await api('/api/chat',{date:d,message,revision:chatState.revision,consent:true});chatDrafts[d]='';if(chatDate===d){$('chat-input').value='';renderChat(c);chatStatus('已回复；回答基于发送时的报告。');}}
+  try{const c=await api('/api/chat',{date:d,message,revision:chatState.revision,consent:true,provider:chatState.provider});chatDrafts[d]='';if(chatDate===d){$('chat-input').value='';renderChat(c);chatStatus('已回复；回答基于发送时的报告。');}}
   catch(e){if(chatDate===d)chatStatus(e.message+' 问题仍保留，可重试。',true);}
   finally{chatSending=false;$('chat-send').disabled=!chatState?.ready||chatState?.busy;$('chat-new').disabled=!!chatState?.busy;}
 };

@@ -23,6 +23,7 @@ import muscles
 import coach
 import decision
 import chat
+import providers
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
@@ -74,10 +75,14 @@ def update_settings(values):
         save(DATA / 'settings.json', s)
 
 
-def request_json(url, payload=None, token=None, form=False):
+def request_json(url, payload=None, token=None, form=False, extra_headers=None):
+    provider='gemini' if url.startswith('https://generativelanguage.googleapis.com/') else 'openai'
+    is_ai=url.startswith(('https://api.openai.com/','https://generativelanguage.googleapis.com/'))
+    ai_status=DATA/('ai-status-gemini.json' if provider=='gemini' else 'ai-status.json')
     headers = {'User-Agent': 'IronOuraMVP/0.1', 'Accept-Encoding': 'gzip'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
+    if extra_headers:headers.update(extra_headers)
     body = None
     if payload is not None:
         headers['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
@@ -90,20 +95,22 @@ def request_json(url, payload=None, token=None, form=False):
         if raw[:2] == b'\x1f\x8b':
             raw = gzip.decompress(raw)
         result=json.loads(raw)
-        if url.startswith('https://api.openai.com/'):
-            save(DATA/'ai-status.json',{'ok':True,'checked_at':time.time()})
+        if is_ai:
+            save(ai_status,{'ok':True,'checked_at':time.time()})
         return result
     except urllib.error.HTTPError as e:
         labels = {401: '授权无效或已过期，请重新连接', 403: '无访问权限，请检查会员或授权范围',
                   429: '请求过于频繁，请稍后再试'}
+        if provider=='gemini':
+            labels.update({400:'Gemini 请求无效，请核对模型 ID 和参数',403:'Gemini 无访问权限，请检查 API Key、项目和地区',404:'Gemini 模型不存在或当前 Key 不可用',429:'Gemini 额度或速率受限，请检查项目配额后重试'})
         if e.code == 429 and url.startswith('https://api.openai.com/'):
             try:
                 error=json.loads(e.read(16384)).get('error',{})
                 if error.get('code')=='insufficient_quota' or error.get('type')=='insufficient_quota':
                     labels[429]='OpenAI API 额度不足，请检查账户余额和账单设置'
             except (ValueError,AttributeError):pass
-        if url.startswith('https://api.openai.com/'):
-            save(DATA/'ai-status.json',{'ok':False,'checked_at':time.time(),'message':labels.get(e.code,'模型请求失败，请检查设置或稍后重试')})
+        if is_ai:
+            save(ai_status,{'ok':False,'checked_at':time.time(),'message':labels.get(e.code,'模型请求失败，请检查设置或稍后重试')})
         raise AppError(f'接口 HTTP {e.code}：{labels.get(e.code, "请求失败，请稍后重试")}。') from None
     except (urllib.error.URLError, TimeoutError):
         raise AppError('无法连接服务，请检查网络后重试。') from None
@@ -680,22 +687,16 @@ def propose_decision(d):
 
 
 def ai_report(d):
-    s = settings()
-    if not s.get('openai_key') or not s.get('openai_model'):
-        raise AppError('请先在设置中填写 OpenAI API Key 和你可用的模型 ID。')
+    c=providers.require(sys.modules[__name__])
     r = report(d)
     if not r['last_sessions'] and all(r['recovery'].get(k) is None for k in ('sleep_hours','hrv','rhr','sleep_score','readiness')):
         raise AppError('请先同步训练或 Oura 数据，再生成 AI 解读。')
     ctx = analysis_context(d, r)
-    data = request_json('https://api.openai.com/v1/responses', {
-        'model': s['openai_model'], 'store': False, 'instructions':decision.PROMPT,
-        'input':json.dumps(ctx,ensure_ascii=False),
-        'text':{'format':{'type':'json_schema','name':'training_decision','strict':True,'schema':decision.SCHEMA}}}, s['openai_key'])
-    output = '\n'.join(c.get('text','') for item in data.get('output',[]) for c in item.get('content',[]) if c.get('type')=='output_text')
+    output=providers.complete(sys.modules[__name__],c,decision.PROMPT,json.dumps(ctx,ensure_ascii=False),decision.SCHEMA)
     try:value=json.loads(output)
     except (ValueError,TypeError):raise AppError('模型未返回有效决策，原计划未修改。') from None
-    record=store_decision(d,value,decision.fingerprint(ctx),'OpenAI / '+s['openai_model'])
-    result={'date':d,'text':decision.markdown(record),'generated_at':time.time(),'model':s['openai_model']}
+    record=store_decision(d,value,decision.fingerprint(ctx),c['label']+' / '+c['model'])
+    result={'date':d,'text':decision.markdown(record),'generated_at':time.time(),'model':c['model']}
     save(DATA/'reports'/(d+'.json'),result)
     return result
 
@@ -743,7 +744,9 @@ class Handler(BaseHTTPRequestHandler):
                 _, dates = training_data()
                 self.reply({'today': today().isoformat(), 'timezone': str(TZ), 'xunji': bool(s.get('xunji_key')),
                             'oura': bool(s.get('oura_tokens')), 'oura_configured': bool(s.get('oura_client_id') and s.get('oura_client_secret')),
-                            'ai': bool(s.get('openai_key') and s.get('openai_model')), 'model': s.get('openai_model', ''),
+                            'ai':providers.ready(sys.modules[__name__]),'model':providers.config(sys.modules[__name__])['model'],
+                            'ai_provider':s.get('ai_provider','openai'),'ai_models':{k:s.get(k+'_model','') for k in ('openai','gemini')},
+                            'gemini_paid_confirmed':s.get('gemini_paid_confirmed') is True,
                             'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://localhost:{PORT}/oauth/callback'})
             elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach', '/api/chat'):
                 d = day(params.get('date', [today().isoformat()])[0])
@@ -796,8 +799,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == '/api/settings':
                 if JOB['running']:
                     raise AppError('请等同步完成后再更改连接设置。')
-                values = {k: str(body[k]).strip() for k in ('xunji_key', 'oura_client_id', 'oura_client_secret', 'openai_key', 'openai_model') if body.get(k)}
+                values = {k: str(body[k]).strip() for k in ('xunji_key', 'oura_client_id', 'oura_client_secret', 'openai_key', 'openai_model','gemini_key','gemini_model','ai_provider') if body.get(k)}
+                if 'ai_provider' in values and values['ai_provider'] not in providers.LABELS:raise AppError('AI 提供商无效。')
+                if 'gemini_paid_confirmed' in body:values['gemini_paid_confirmed']=body['gemini_paid_confirmed'] is True
                 s = settings()
+                if values.get('gemini_key') and values['gemini_key']!=s.get('gemini_key'):
+                    values['gemini_paid_confirmed']=body.get('gemini_paid_confirmed') is True
                 if any(k in values and values[k] != s.get(k) for k in ('oura_client_id', 'oura_client_secret')):
                     values['oura_tokens'] = {}
                 update_settings(values)
@@ -847,7 +854,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(chat.new_conversation(sys.modules[__name__],body))
             elif p == '/api/ai':
                 if body.get('consent') is not True:
-                    raise AppError('请先确认将摘要发送至 OpenAI。')
+                    raise AppError('请先确认将摘要发送至当前 AI 提供商。')
+                if body.get('provider')!=providers.config(sys.modules[__name__])['provider']:raise AppError('AI 提供商已变化，请刷新并重新授权。')
                 self.reply(ai_report(day(body.get('date'))))
             else:
                 self.reply({'error': '接口不存在'}, 404)

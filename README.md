@@ -40,7 +40,7 @@ python3 morning_report.py --cached
 
 此代码不自行安装定时任务。Codex 中已配置的自动化可每天调用上述流程，具体时间以自动化设置为准。电脑和运行环境需可用。
 
-可选网页 AI 按钮需要自己的 OpenAI API Key 和可用模型 ID；明确授权后，通过 Responses API 发送近 28 天训练、恢复、活动、偏好、计划、反馈和所填症状/周期背景，返回结构化决策。`store:false` 不代表零数据保留，API 可能收费。自由文本 check-in 备注及密钥不进入模型输入；身体背景症状文字会在该授权范围内发送。
+可选网页 AI 按钮需要所选提供商的 API Key 和可用模型 ID；明确授权后，通过 OpenAI Responses API 或 Gemini generateContent 发送近 28 天训练、恢复、活动、偏好、计划、反馈和所填症状/周期背景，返回结构化决策。OpenAI 的 `store:false` 不代表零数据保留；Gemini 适用 Google 自身的数据处理条款，API 可能收费。自由文本 check-in 备注及密钥不进入模型输入；身体背景症状文字会在该授权范围内发送。
 
 ## 本机数据与边界
 
@@ -76,3 +76,12 @@ node --check static/app.js
 聊天仅解释和提出建议，没有修改计划/反馈、同步或校准工具，不声称已执行操作。需要持久更正或接受修订时，仍使用相应表单与计划入口。历史基础草案的每动作两组上限不等于个体最优组数或症状专门减载。
 
 Responses API 使用 `store:false`，但不保证零数据保留或免除费用。额度不足、授权或网络问题会明确提示；未完成模型回复不当作成功回答。没有进行健康数据的无授权真实模型测试。
+
+
+## Gemini 配置
+
+「连接与设置 → AI 提供商 → Google / Gemini」输入 Gemini API Key 和该项目可用的模型 ID，再确认项目已启用付费服务并保存。密钥只保存在本机服务端，不回传浏览器，不放 URL。Google 免费服务条款要求不提交敏感/个人信息；本应用含私人健康背景，因此发送前须确认使用付费服务。
+
+同一提供商配置用于网页问答和结构化日报。切换提供商后清除发送授权，页面显示实际接收方；服务端也核对提供商，避免旧页面把原先授权发送给另一家。不会自动降级发送给其他提供商。Gemini 使用原生 generateContent、systemInstruction、多轮 user/model 内容和 responseJsonSchema；不会声称 Gemini 支持 OpenAI 的 store:false。
+
+参考：[Gemini API](https://ai.google.dev/api/generate-content)、[Google 数据处理条款](https://ai.google.dev/gemini-api/terms)。实际模型和额度须以用户项目为准。未提供 Gemini Key 时仅完成模拟测试，不能宣称真实调用已成功。

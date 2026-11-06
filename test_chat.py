@@ -16,7 +16,7 @@ class ChatTests(unittest.TestCase):
         app.save(app.DATA/'checkins.json',{'2026-11-06':{'energy':3,'note':'PRIVATE NOTE'}})
         app.run_coach('2026-11-06')
     def tearDown(self):self.p.stop();self.tmp.cleanup();chat.BUSY.clear()
-    def body(self,**kw):return {'date':'2026-11-06','message':'这些组数为什么这么安排？','consent':True,'revision':0,**kw}
+    def body(self,**kw):return {'date':'2026-11-06','message':'这些组数为什么这么安排？','consent':True,'provider':'openai','revision':0,**kw}
     def response(self,text='这是规则生成的起步草案。'):return {'status':'completed','output':[{'content':[{'type':'output_text','text':text}]}]}
     def test_consent_validation_never_calls_provider(self):
         with patch.object(app,'request_json') as req:
