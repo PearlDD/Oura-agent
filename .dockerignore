@@ -10,3 +10,5 @@
 !providers.py
 !static/
 !static/**
+!push.py
+!requirements-cloud.txt

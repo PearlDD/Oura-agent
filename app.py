@@ -25,6 +25,7 @@ import decision
 import chat
 import providers
 import cloud
+import push
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR') or str(ROOT.parents[1] / 'work' / 'iron-oura-data'))
@@ -717,7 +718,7 @@ class Handler(BaseHTTPRequestHandler):
         pass  # OAuth query strings and health data never enter request logs.
 
     def reply(self, value, status=200, mime='application/json; charset=utf-8'):
-        body = json.dumps(value, ensure_ascii=False).encode() if mime.startswith('application/json') else value.encode()
+        body = json.dumps(value, ensure_ascii=False).encode() if mime.startswith('application/json') else value if isinstance(value, bytes) else value.encode()
         self.send_response(status)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
@@ -747,8 +748,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == '/':
                 self.reply((ROOT / 'static/index.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
-            elif p in ('/app.js', '/style.css'):
-                self.reply((ROOT / 'static' / p[1:]).read_text(), mime='text/javascript' if p.endswith('.js') else 'text/css')
+            elif p in ('/app.js', '/style.css', '/push.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
+                mime = ('text/javascript' if p.endswith('.js') else 'text/css' if p.endswith('.css') else
+                        'image/png' if p.endswith('.png') else 'application/manifest+json')
+                self.reply((ROOT / 'static' / p[1:]).read_bytes(), mime=mime)
+            elif p == '/api/push/key':
+                self.reply({'public_key': push.public_key(sys.modules[__name__])})
+            elif p == '/api/push/status':
+                devices = load(DATA / 'push-subscriptions.json', {}).get('devices', {})
+                self.reply({'registered': params.get('device_id', [''])[0] in devices})
             elif p == '/api/status':
                 s = settings()
                 _, dates = training_data()
@@ -757,6 +765,7 @@ class Handler(BaseHTTPRequestHandler):
                             'ai':providers.ready(sys.modules[__name__]),'model':providers.config(sys.modules[__name__])['model'],
                             'ai_provider':s.get('ai_provider','openai'),'ai_models':{k:s.get(k+'_model','') for k in ('openai','gemini')},
                             'gemini_paid_confirmed':s.get('gemini_paid_confirmed') is True,
+                            'automation': cloud.view(sys.modules[__name__]), 'push': push.view(sys.modules[__name__]),
                             'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': redirect_uri()})
             elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach', '/api/chat'):
                 d = day(params.get('date', [today().isoformat()])[0])
@@ -806,7 +815,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise AppError('请求格式无效。')
             p = urllib.parse.urlparse(self.path).path
-            if p == '/api/settings':
+            if p == '/api/push/subscribe':
+                self.reply(push.subscribe(sys.modules[__name__], body))
+            elif p == '/api/push/unsubscribe':
+                self.reply(push.unsubscribe(sys.modules[__name__], body))
+            elif p == '/api/push/test':
+                self.reply(push.deliver(sys.modules[__name__], today().isoformat(), str(body.get('device_id', '')), test=True))
+            elif p == '/api/automation/retry':
+                self.reply(cloud.retry(sys.modules[__name__]))
+            elif p == '/api/settings':
                 if JOB['running']:
                     raise AppError('请等同步完成后再更改连接设置。')
                 values = {k: str(body[k]).strip() for k in ('xunji_key', 'oura_client_id', 'oura_client_secret', 'openai_key', 'openai_model','gemini_key','gemini_model','ai_provider') if body.get(k)}

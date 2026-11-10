@@ -27,6 +27,7 @@ async function refreshStatus() {
   }
   $('ai-state').textContent=state.ai?'已配置':'可选 · 待配置';
   $('redirect-uri').value=state.redirect_uri;
+  if(typeof window.renderAutomation==='function')window.renderAutomation(state.automation,state.push);
   $('sync').disabled=state.job.running;
   const errors=state.job.errors || [];
   if(state.job.running)status(state.job.message);

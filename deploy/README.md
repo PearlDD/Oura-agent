@@ -54,29 +54,53 @@ plan versions, feedback and data coverage against the local copy. Export a repor
 confirm data survives container recreation. Only then pause the desktop automation.
 Do not leave two daily runners active after cutover.
 
-## Daily operation
+## Sleep-ready operation and phone notifications
 
-Scheduling stays disabled during installation (`IRON_SCHEDULE_ENABLED=0`). Enable it only after data, authorization, and restore checks pass and the desktop runner is paused.
+Scheduling stays disabled during installation (`IRON_SCHEDULE_ENABLED=0`). After
+authorization and verification, set it to 1 and pause the old desktop runner.
+The default deployment mode is `IRON_SCHEDULE_MODE=wake`, not a fixed clock time.
 
-Once enabled, the web process checks every 30 seconds. At/after 11:00 America/New_York it attempts
-one synchronization/report per date, including same-day catch-up after a restart.
-Run state is in private `cloud-runs.json`. Failed/incomplete/crashed attempts do not
-retry automatically; use the protected website to synchronize and regenerate manually.
-This avoids repeated paid calls after restarts. Missing main sleep or failed sync
-blocks scheduled AI; incomplete data is still labelled in the Markdown report.
+The same app process checks Oura every 15 minutes (`IRON_WAKE_POLL_SECONDS=900`).
+It waits for today's ended main sleep, today's sleep and readiness scores, and a
+stable snapshot for 15 minutes (`IRON_WAKE_STABLE_SECONDS=900`). This is a data
+readiness proxy, not real-time detection that the user is awake. Open the Oura App
+after waking so the ring can upload. Fragments, future/old sleep end dates, missing
+scores and failed polls cannot trigger AI. Poll failures retry at the normal interval
+without a model request. A completed/failed model attempt is not automatically
+repeated after restart. The protected page provides an explicit retry for failed or
+incomplete analysis. An already-fresh report from the same model can be reused.
 
-`IRON_SCHEDULE_AI=0` is the default: synchronization and a data report only. For actual
-model decisions, first configure the provider and explicitly authorize daily health
-context submission. Then set `IRON_SCHEDULE_AI=1` and
-`IRON_SCHEDULE_AI_PROVIDER=gemini` (or `openai`) and recreate the app container.
-Changing provider requires updating this opt-in too. Gemini's paid-service confirmation
-is also required by the app. No automatic provider fallback occurs. API charges are
-separate from VPS charges. A generated AI decision is not a completed workout or an
-automatically accepted revision of an existing plan.
+`IRON_SCHEDULE_AI=0` generates data reports only. Actual model decisions require
+an explicit provider opt-in: `IRON_SCHEDULE_AI=1` and
+`IRON_SCHEDULE_AI_PROVIDER=openai` or `gemini`. The configured provider must match.
+Gemini also requires paid-service confirmation. API fees are separate from VPS fees.
+A report does not mark a workout complete or accept a plan revision automatically.
 
-Cloud operation updates the protected website and `/reports` volume. It does not
-send chat notifications, email, or external messages. Closing the Mac does not stop
-the VPS, but a Codex desktop automation cannot itself deliver messages while offline.
+Web Push is opt-in per device from the protected website. On iPhone/iPad, add the
+site to the Home Screen and open it there before enabling notifications. A user
+interaction must request browser permission; the app does not prompt on page load.
+Use the test button to confirm receipt. A successful push service response means
+accepted for delivery, not proof that the OS displayed it. Focus mode, permissions
+and network delivery still matter.
+
+Notifications contain fixed generic text and a report link/date, with no health
+metrics, symptoms or training verdict on the lock screen. Standard Web Push routes
+the encrypted payload through the browser vendor's push service. Private subscriptions
+and `push-vapid.pem` stay in `/data`; protect and back them up with other private data.
+The public VAPID key is safe to return to the browser. Unsubscribing stops future
+sends to that device; expired endpoints are removed. Automatic delivery attempts
+are recorded before sending and deduplicated by date/device. Failed notification
+delivery does not erase the report or regenerate it. No email or Telegram is sent.
+
+The service worker handles notification events only. It does not cache private pages,
+API responses, credentials or reports for offline use. All app routes, including
+subscription settings and the report link, remain protected by the login boundary.
+At most one app process may write these JSON state files.
+
+Runtime status is in private `cloud-runs.json`, `wake-poll.json` and
+`push-subscriptions.json`, with a summary on the dashboard. The compatibility
+`fixed` mode still supports `IRON_SCHEDULE_HOUR`, but the deployed wake mode ignores
+that clock threshold.
 
 ## Backup and rollback
 
