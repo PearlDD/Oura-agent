@@ -98,7 +98,15 @@ node --check static/app.js
 Responses API 使用 `store:false`，但不保证零数据保留或免除费用。额度不足、授权或网络问题会明确提示；未完成模型回复不当作成功回答。没有进行健康数据的无授权真实模型测试。
 
 
-## Gemini 配置
+## AI 配置：当前使用 OpenAI / GPT
+
+当前部署选择 **OpenAI**，模型 ID 为 **`gpt-6.1-sol`**。在「连接与设置 → AI 提供商 → OpenAI」保存 OpenAI API Key 和模型 ID；同一配置用于网页问答和结构化日报。配置保存成功不等于已经完成真实模型调用，生成报告或聊天前仍需确认页面的数据发送授权。
+
+OpenAI 使用 Responses API，并设置 `store: false`；该参数不等于零数据保留，API 按账户实际用量计费。训练记录、Oura 授权与 AI 提供商分别配置，修改 AI 提供商不会替代 Oura 授权。
+
+### 可选备用：Google / Gemini（当前未使用）
+
+下面仅说明如何主动切换到 Gemini；保留这项接入能力不代表当前报告使用 Gemini。系统不会自动将 OpenAI 请求转交给 Gemini。
 
 「连接与设置 → AI 提供商 → Google / Gemini」输入 Gemini API Key 和该项目可用的模型 ID，再确认项目已启用付费服务并保存。密钥只保存在应用服务器端（本机或 VPS），不回传浏览器，不放 URL。Google 免费服务条款要求不提交敏感/个人信息；本应用含私人健康背景，因此发送前须确认使用付费服务。
 
