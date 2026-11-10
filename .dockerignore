@@ -1,0 +1,12 @@
+*
+!Dockerfile
+!app.py
+!cloud.py
+!morning_report.py
+!muscles.py
+!coach.py
+!decision.py
+!chat.py
+!providers.py
+!static/
+!static/**

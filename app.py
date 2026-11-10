@@ -24,11 +24,17 @@ import coach
 import decision
 import chat
 import providers
+import cloud
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
 TZ = ZoneInfo(os.environ.get('IRON_TIMEZONE', 'America/New_York'))
 PORT = int(os.environ.get('IRON_PORT', '8765'))
+BIND = os.environ.get('IRON_BIND', '127.0.0.1')
+PUBLIC_URL = cloud.public_origin(os.environ.get('IRON_PUBLIC_URL', ''))
+PROXY_TOKEN = os.environ.get('IRON_PROXY_TOKEN', '')
+REPORT_DIR = Path(os.environ.get('IRON_REPORT_DIR', str(ROOT.parents[1] / 'outputs' / '晨报')))
+cloud.validate(BIND, PUBLIC_URL, PROXY_TOKEN)
 LOCK = threading.RLock()
 NONCE = secrets.token_urlsafe(32)
 OAUTH = {}
@@ -37,6 +43,10 @@ JOB = {'running': False, 'message': '尚未同步', 'errors': []}
 
 class AppError(Exception):
     pass
+
+
+def redirect_uri():
+    return (PUBLIC_URL or f'http://localhost:{PORT}') + '/oauth/callback'
 
 
 def today():
@@ -726,7 +736,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def allowed(self):
-        return self.headers.get('Host') in (f'127.0.0.1:{PORT}', f'localhost:{PORT}')
+        return cloud.allowed(self.headers, PORT, PUBLIC_URL, PROXY_TOKEN)
 
     def do_GET(self):
         if not self.allowed():
@@ -747,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
                             'ai':providers.ready(sys.modules[__name__]),'model':providers.config(sys.modules[__name__])['model'],
                             'ai_provider':s.get('ai_provider','openai'),'ai_models':{k:s.get(k+'_model','') for k in ('openai','gemini')},
                             'gemini_paid_confirmed':s.get('gemini_paid_confirmed') is True,
-                            'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': f'http://localhost:{PORT}/oauth/callback'})
+                            'dates': dates, 'job': JOB if JOB['running'] or JOB['message'] != '尚未同步' else load(DATA / 'last-sync.json', {'running': False, 'message': '本地缓存已就绪', 'errors': []}), 'redirect_uri': redirect_uri()})
             elif p in ('/api/report', '/api/export', '/api/ai', '/api/coach', '/api/chat'):
                 d = day(params.get('date', [today().isoformat()])[0])
                 if p == '/api/report':
@@ -773,7 +783,7 @@ class Handler(BaseHTTPRequestHandler):
                 s = settings()
                 tokens = request_json('https://api.ouraring.com/oauth/token', {
                     'grant_type': 'authorization_code', 'code': code, 'client_id': s['oura_client_id'],
-                    'client_secret': s['oura_client_secret'], 'redirect_uri': f'http://localhost:{PORT}/oauth/callback',
+                    'client_secret': s['oura_client_secret'], 'redirect_uri': redirect_uri(),
                     'code_verifier': entry['verifier']}, form=True)
                 store_tokens(tokens)
                 self.redirect('/?connected=oura')
@@ -846,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
                 challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
                 self.reply({'url': 'https://cloud.ouraring.com/oauth/authorize?' + urllib.parse.urlencode({
                     'response_type': 'code', 'client_id': s['oura_client_id'],
-                    'redirect_uri': f'http://localhost:{PORT}/oauth/callback', 'scope': 'daily',
+                    'redirect_uri': redirect_uri(), 'scope': 'daily',
                     'state': state, 'code_challenge': challenge, 'code_challenge_method': 'S256'})})
             elif p == '/api/chat':
                 self.reply(chat.send(sys.modules[__name__],body))
@@ -878,8 +888,9 @@ def main():
     if args.report:
         print(markdown(report(day(args.report))))
         return
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
-    print(f'Iron / Oura 已启动：http://127.0.0.1:{PORT}', flush=True)
+    server = ThreadingHTTPServer((BIND, PORT), Handler)
+    cloud.start(sys.modules[__name__])
+    print('Iron / Oura 已启动：' + (PUBLIC_URL or f'http://127.0.0.1:{PORT}'), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

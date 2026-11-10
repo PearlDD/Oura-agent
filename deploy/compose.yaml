@@ -1,0 +1,48 @@
+name: iron-oura
+services:
+  app:
+    build: ..
+    restart: unless-stopped
+    environment:
+      IRON_BIND: 0.0.0.0
+      IRON_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN}
+      IRON_PROXY_TOKEN: ${IRON_PROXY_TOKEN:?Set a random 32+ character token}
+      IRON_TIMEZONE: America/New_York
+      IRON_SCHEDULE_ENABLED: "1"
+      IRON_SCHEDULE_HOUR: "11"
+      IRON_SCHEDULE_AI: ${IRON_SCHEDULE_AI:-0}
+      IRON_SCHEDULE_AI_PROVIDER: ${IRON_SCHEDULE_AI_PROVIDER:-}
+    volumes:
+      - iron_data:/data
+      - iron_reports:/reports
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+      LOGIN_USER: ${LOGIN_USER:?Set LOGIN_USER}
+      LOGIN_HASH: ${LOGIN_HASH:?Set a bcrypt password hash}
+      IRON_PROXY_TOKEN: ${IRON_PROXY_TOKEN:?Set proxy token}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+volumes:
+  iron_data:
+  iron_reports:
+  caddy_data:
+  caddy_config:

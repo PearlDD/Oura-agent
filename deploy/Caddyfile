@@ -1,0 +1,15 @@
+{
+    # No request/error logs containing OAuth URLs or private HTTP headers.
+    log {
+        output discard
+    }
+}
+{$DOMAIN} {
+    basic_auth {
+        {$LOGIN_USER} {$LOGIN_HASH}
+    }
+    reverse_proxy app:8765 {
+        header_up X-Iron-Proxy-Token {$IRON_PROXY_TOKEN}
+        header_up -Authorization
+    }
+}
