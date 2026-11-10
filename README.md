@@ -4,7 +4,13 @@
 
 ## 云端访问与连接
 
-已部署的私人面板：**https://pearloura.duckdns.org/
+已部署的私人面板：[打开 Oura 云端网页](https://pearloura.duckdns.org/)。页面需要登录。
+
+需要复制地址时，只复制下面代码框里的网址：
+
+```text
+https://pearloura.duckdns.org/
+```
 
 网页登录密码与 API Key 分开管理。密码保存在用户本机的私有文件中，不发布到此仓库。云端网页运行在 VPS 上，关闭 Mac 后网页仍可访问。
 
