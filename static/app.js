@@ -30,7 +30,7 @@ async function refreshStatus() {
   $('sync').disabled=state.job.running;
   const errors=state.job.errors || [];
   if(state.job.running)status(state.job.message);
-  else if(errors.length)status(errors.join('；'),true);
+  else if(errors.length)status('上次同步：'+errors.join('；')+(state.xunji&&errors.some(e=>e.includes('请先配置训记 API Key'))?' 当前训记密钥已保存，请重新同步验证。':''),true);
   else status(state.dates.length ? `已缓存 ${state.dates.length} 个日期 · ${state.job.message}`:'连接已就绪，点击「同步数据」读取真实训练记录。');
   if (wasRunning && !state.job.running) await refreshReport();
   wasRunning=state.job.running;
@@ -107,7 +107,7 @@ function brief(value,max=82){
   return first.length>max?first.slice(0,max-1)+'…':first;
 }
 function decisionSignal(record,plan){
-  if(!record||record.stale)return {tone:'neutral',label:record?.stale?'该重新看一眼了':'等数据齐了再说',english:record?.stale?'UPDATE NEEDED':'WAIT FOR INSIGHT'};
+  if(!record||record.stale)return {tone:'neutral',label:record?.stale?'分析已过期':'等待生成分析',english:record?.stale?'REGENERATE ANALYSIS':'WAIT FOR INSIGHT'};
   const v=record.analysis.verdict;
   if(v==='rest')return {tone:'red',label:'今天先休息',english:'REST & RESET'};
   if(v==='reduce'||v==='light')return {tone:'amber',label:v==='light'?'轻轻动一动':'放慢一点',english:'GO EASY'};
@@ -119,10 +119,11 @@ function renderDecision(record,plan){
   const labels={keep:'保持原安排',reduce:'减量',rest:'休息',light:'轻量活动',clarify:'先补信息'};
   const a=record?.analysis,signal=decisionSignal(record,plan);
   $('decision-panel').dataset.tone=signal.tone;
+  $('decision-panel').querySelector('.eyebrow').textContent=record?.stale?'AI 历史分析 · 等待更新':'TODAY’S CALL · AI 今日建议';
   $('decision-signal').textContent=signal.label;$('decision-english').textContent=signal.english;
-  $('decision-verdict').textContent=record?.stale?'分析待更新':a?labels[a.verdict]:'尚无结论';
-  $('decision-headline').textContent=a?.headline||'同步数据后，让 Agent 看看今天适合怎么练。';
-  $('decision-rationale').textContent=a?brief(a.rationale.split(/(?<=[。！？])/u).find(v=>!v.includes('不存在的训练'))||a.rationale,105):'已有规则草案，等待实际 AI 分析。';
+  $('decision-verdict').textContent=record?.stale?'待重新生成':a?labels[a.verdict]:'尚无结论';
+  $('decision-headline').textContent=record?.stale?'数据已变化，请重新生成今日分析。':a?.headline||'同步数据后，让 Agent 看看今天适合怎么练。';
+  $('decision-rationale').textContent=record?.stale?'下方保留的是上次分析记录，不作为今天训练安排的依据。':a?brief(a.rationale.split(/(?<=[。！？])/u).find(v=>!v.includes('不存在的训练'))||a.rationale,105):'已有规则草案，等待实际 AI 分析。';
   $('decision-full-rationale').textContent=a?.rationale||'';
   $('decision-meta').textContent=record?`${record.source} · ${new Date(record.created_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · ${record.stale?'数据已变化，以下为历史分析':{low:'仍需主观反馈',medium:'部分信息待核对',high:'信息较完整'}[a.confidence]}`:'';
   $('decision-evidence').replaceChildren(...(a?.evidence||[]).map(e=>text('li',e.statement)));
@@ -131,7 +132,7 @@ function renderDecision(record,plan){
   for(const [label,key] of [['肌群负荷复核','muscle_review'],['短期调整','short_term'],['长期计划','long_term'],['待确认','questions']]){
     if(a?.[key]?.length){const ul=text('ul','');ul.append(...a[key].map(v=>text('li',v)));box.append(text('h3',label),ul);}
   }
-  $('decision-next').textContent=a?brief(a.questions?.[0]||a.short_term?.[0]||a.headline,85):'先同步 Oura 和训记，再生成当日分析。';
+  $('decision-next').textContent=record?.stale?'先完成数据同步，再确认 AI 数据发送授权并点击生成解读。':a?brief(a.questions?.[0]||a.short_term?.[0]||a.headline,85):'先同步 Oura 和训记，再生成当日分析。';
   $('decision-apply').hidden=!a?.adjustment||record.stale;
 }
 function renderClues(r){
