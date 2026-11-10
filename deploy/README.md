@@ -54,7 +54,9 @@ Do not leave two daily runners active after cutover.
 
 ## Daily operation
 
-The web process checks every 30 seconds. At/after 11:00 America/New_York it attempts
+Scheduling stays disabled during installation (`IRON_SCHEDULE_ENABLED=0`). Enable it only after data, authorization, and restore checks pass and the desktop runner is paused.
+
+Once enabled, the web process checks every 30 seconds. At/after 11:00 America/New_York it attempts
 one synchronization/report per date, including same-day catch-up after a restart.
 Run state is in private `cloud-runs.json`. Failed/incomplete/crashed attempts do not
 retry automatically; use the protected website to synchronize and regenerate manually.

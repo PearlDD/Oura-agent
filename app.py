@@ -27,13 +27,13 @@ import providers
 import cloud
 
 ROOT = Path(__file__).resolve().parent
-DATA = Path(os.environ.get('IRON_DATA_DIR', str(ROOT.parents[1] / 'work' / 'iron-oura-data')))
+DATA = Path(os.environ.get('IRON_DATA_DIR') or str(ROOT.parents[1] / 'work' / 'iron-oura-data'))
 TZ = ZoneInfo(os.environ.get('IRON_TIMEZONE', 'America/New_York'))
 PORT = int(os.environ.get('IRON_PORT', '8765'))
 BIND = os.environ.get('IRON_BIND', '127.0.0.1')
 PUBLIC_URL = cloud.public_origin(os.environ.get('IRON_PUBLIC_URL', ''))
 PROXY_TOKEN = os.environ.get('IRON_PROXY_TOKEN', '')
-REPORT_DIR = Path(os.environ.get('IRON_REPORT_DIR', str(ROOT.parents[1] / 'outputs' / '晨报')))
+REPORT_DIR = Path(os.environ.get('IRON_REPORT_DIR') or str(ROOT.parents[1] / 'outputs' / '晨报'))
 cloud.validate(BIND, PUBLIC_URL, PROXY_TOKEN)
 LOCK = threading.RLock()
 NONCE = secrets.token_urlsafe(32)
