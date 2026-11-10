@@ -18,7 +18,7 @@ async function refreshStatus() {
   const recipient=state.ai_provider==='gemini'?'Google / Gemini':'OpenAI';
   $('ai-consent-copy').textContent=`允许将近28天训练、恢复、活动、肌群估计、偏好、计划、疲劳、症状、strain及周期背景发送至 ${recipient}。`;
   $('chat-consent-copy').textContent=`同意将本次问题、近期对话及所选报告背景（含训练、恢复、症状和周期）发送至 ${recipient}。`;
-  $('chat-data-note').textContent=state.ai_provider==='gemini'?'对话保存在本机，聊天不自动改计划。Gemini API 可能收费，数据处理适用 Google 付费服务条款。':'对话保存在本机，聊天不自动改计划。API 可能收费，store:false 不等于零数据保留。';
+  $('chat-data-note').textContent=state.ai_provider==='gemini'?'对话保存在应用服务器，聊天不自动改计划。Gemini API 可能收费，数据处理适用 Google 付费服务条款。':'对话保存在应用服务器，聊天不自动改计划。API 可能收费，store:false 不等于零数据保留。';
   if (!$('report-date').value) {$('report-date').value=state.today; $('report-date').max=state.today;}
   $('timezone').textContent=state.timezone;
   for (const [name,label] of [['xunji','已配置'],['oura','已授权']]) {
@@ -288,7 +288,7 @@ async function saveSettings(){
   body.ai_provider=$('ai-provider').value;body.gemini_paid_confirmed=$('gemini-paid').checked;
   await api('/api/settings',body);
   for(const id of ['xunji-key','oura-secret','openai-key','gemini-key'])$(id).value='';
-  $('settings-status').textContent='设置已保存在本机。';
+  $('settings-status').textContent='设置已保存在应用服务器。';
   $('chat-consent').checked=false;$('ai-consent').checked=false;
   await refreshStatus();if(!$('chat-drawer').hidden)await loadChat();
 }
@@ -347,7 +347,7 @@ $('chat-open-inline').onclick=openChat;$('chat-close').onclick=closeChat;
 $('chat-input').oninput=()=>{if(chatDate)chatDrafts[chatDate]=$('chat-input').value;};
 $('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
 $('chat-drawer').onkeydown=e=>{if(e.key==='Escape')closeChat();};
-$('chat-new').onclick=async()=>{if(chatSending||!chatState||chatLoading)return;try{const d=chatDate;const c=await api('/api/chat/new',{date:d,revision:chatState.revision});if(d===chatDate){chatDrafts[d]='';$('chat-input').value='';$('chat-consent').checked=false;renderChat(c);chatStatus('已开始新对话，旧对话仍保存在本机归档。');}}catch(e){chatStatus(e.message,true);}};
+$('chat-new').onclick=async()=>{if(chatSending||!chatState||chatLoading)return;try{const d=chatDate;const c=await api('/api/chat/new',{date:d,revision:chatState.revision});if(d===chatDate){chatDrafts[d]='';$('chat-input').value='';$('chat-consent').checked=false;renderChat(c);chatStatus('已开始新对话，旧对话仍保存在应用服务器归档。');}}catch(e){chatStatus(e.message,true);}};
 $('chat-form').onsubmit=async e=>{
   e.preventDefault();if(chatSending||chatLoading||!chatState||chatState.date!==chatDate)return;
   const d=chatDate,message=$('chat-input').value.trim();
@@ -358,4 +358,4 @@ $('chat-form').onsubmit=async e=>{
   catch(e){if(chatDate===d)chatStatus(e.message+' 问题仍保留，可重试。',true);}
   finally{chatSending=false;$('chat-send').disabled=!chatState?.ready||chatState?.busy;$('chat-new').disabled=!!chatState?.busy;}
 };
-(async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));},1800);}catch(e){status('本地服务连接失败：'+e.message,true);}})();
+(async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));},1800);}catch(e){status('服务连接失败：'+e.message,true);}})();

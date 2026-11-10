@@ -40,8 +40,10 @@ mode 700 directories / 600 files. Settings, cached records, feedback, muscle map
 preferences, plans and chat history must all survive. Do not replace user preferences
 with the application defaults.
 
-Remove `oura_tokens` from the **cloud copy** of settings, leaving the local original
-intact. In the Oura developer application, add exactly:
+Remove all original credentials from the **cloud copy** of settings (training and AI
+API keys, Oura client secret, and `oura_tokens`), leaving the local original intact.
+Scan the sanitized archive against the source credentials before upload. Reconnect
+services in the protected cloud settings page; do not transfer active local tokens. In the Oura developer application, add exactly:
 
 `https://YOUR_DOMAIN/oauth/callback`
 
