@@ -667,7 +667,20 @@ def current_decision(d, r=None):
     record=load(DATA/'decisions'/(d+'.json'))
     if not record:return None
     # Pass the report under construction to avoid report/context recursion.
-    record['stale']=record['data_hash']!=decision.fingerprint(analysis_context(d,r))
+    ctx = analysis_context(d,r)
+    original_hash = record['data_hash']
+    compatible = decision.compatible_hash(original_hash, ctx,
+        load(DATA/'agent-context'/(d+'.json'), {}))
+    if compatible != original_hash:
+        with LOCK:
+            saved = load(DATA/'decisions'/(d+'.json'), {})
+            if saved.get('data_hash') == original_hash:
+                record = {**saved, 'data_hash': compatible, 'original_data_hash': original_hash,
+                          'fingerprint_version': 2}
+                save(DATA/'decisions'/(d+'.json'), record)
+    else:
+        record['data_hash'] = compatible
+    record['stale']=record['data_hash']!=decision.fingerprint(ctx)
     return record
 
 

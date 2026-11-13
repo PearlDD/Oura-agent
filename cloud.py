@@ -47,6 +47,10 @@ def view(app):
         recovery = app.recovery_data().get(now.date().isoformat(), {})
         if sleep_candidate({'recovery': recovery}, now) == daily['analyzed_sleep']:
             daily['analyzed_sleep_end'] = recovery.get('bedtime_end')
+    if daily.get('status') == 'complete':
+        record = app.report(now.date().isoformat()).get('decision') or {}
+        if record.get('stale'):
+            daily.update(status='analysis_outdated', reason='任务曾完成，但分析所依据的数据或计划已有变化；旧建议暂不适用，请重新分析。')
     return {'enabled': os.environ.get('IRON_SCHEDULE_ENABLED') == '1',
             'mode': os.environ.get('IRON_SCHEDULE_MODE', 'fixed'),
             'ai_enabled': os.environ.get('IRON_SCHEDULE_AI') == '1',

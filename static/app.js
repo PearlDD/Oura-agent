@@ -128,7 +128,7 @@ function renderDecision(record,plan){
   $('decision-headline').textContent=record?.stale?'数据已变化，请重新生成今日分析。':a?.headline||'同步数据后，让 Agent 看看今天适合怎么练。';
   $('decision-rationale').textContent=record?.stale?'下方保留的是上次分析记录，不作为今天训练安排的依据。':a?brief(a.rationale.split(/(?<=[。！？])/u).find(v=>!v.includes('不存在的训练'))||a.rationale,105):'已有规则草案，等待实际 AI 分析。';
   $('decision-full-rationale').textContent=a?.rationale||'';
-  $('decision-meta').textContent=record?`${record.source} · ${new Date(record.created_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · ${record.stale?'数据已变化，以下为历史分析':{low:'仍需主观反馈',medium:'部分信息待核对',high:'信息较完整'}[a.confidence]}`:'';
+  $('decision-meta').textContent=record?`${record.source} · ${new Date(record.created_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · ${record.stale?'数据已变化，以下为历史分析':{low:'仍需主观反馈',medium:'部分信息待核对',high:'信息较完整'}[a.confidence]} · 当日活动为分析时快照，普通步数累计不会单独使分析过期。`:'';
   $('decision-evidence').replaceChildren(...(a?.evidence||[]).map(e=>text('li',e.statement)));
   $('decision-options').replaceChildren(...(a?.options||[]).map(o=>text('p',`${labels[o.mode]} · ${o.when}：${o.details}`)));
   const box=$('decision-details');box.replaceChildren();

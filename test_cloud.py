@@ -221,3 +221,10 @@ class ReliabilityTests(unittest.TestCase):
             self.assertFalse(cloud.run_due(app,self.now))
             self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
             run.assert_called_once()
+
+    def test_completed_task_is_not_shown_current_when_decision_is_stale(self):
+        today=dt.datetime.now(app.TZ).date().isoformat()
+        app.save(app.DATA/'cloud-runs.json',{today:{'status':'complete'}})
+        with patch.object(app,'report',return_value={'decision':{'stale':True}}):
+            self.assertEqual(cloud.view(app)['today']['status'],'analysis_outdated')
+        self.assertEqual(app.load(app.DATA/'cloud-runs.json')[today]['status'],'complete')

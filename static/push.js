@@ -11,7 +11,7 @@ function pushButtons(enabled){
 }
 window.renderAutomation=function(automation,notice){
   if(!automation)return;
-  const run=automation.today||{},names={running:'正在生成',complete:run.update_available?'数据有更新':'今日已完成',failed:'分析未完成',incomplete:'信息待补齐',waiting_for_sleep:'等待睡眠数据'};
+  const run=automation.today||{},names={running:'正在生成',complete:run.update_available?'数据有更新':'今日已完成',analysis_outdated:'分析待更新',failed:'分析未完成',incomplete:'信息待补齐',waiting_for_sleep:'等待睡眠数据'};
   document.getElementById('automation-badge').textContent=automation.enabled?(names[run.status]||'自动检查中'):'尚未启用';
   const mode=automation.mode==='wake'?`Oura 数据就绪后自动分析 · 每 ${automation.poll_minutes} 分钟检查`:'固定时间运行';
   document.getElementById('automation-status').textContent=automation.enabled?mode+'。'+(run.reason||automation.poll?.message||'等待今天的数据。'):'自动任务尚未启用，历史报告仍可查看。';

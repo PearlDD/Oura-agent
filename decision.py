@@ -1,11 +1,13 @@
 """Validated AI-authored decisions, provenance and conservative plan proposals."""
 import hashlib
+import copy
 import json
 
 MODES={'keep':'保持原安排','reduce':'减量训练','rest':'休息','light':'轻量活动','clarify':'先补充信息'}
 PROMPT='''你是用户的中文训练决策 Agent。必须根据输入事实进行综合分析，不要重述数据清单。
 给出一个清楚的今日结论：保持安排、减量、休息、轻量活动或先补信息，解释为什么、何种反馈会改变结论。
 对照今日实际计划：原本休息就不要声称取消了训练。评估最近3/7/14天训练、肌群分布、实际RPE、休息与个人历史周量，区别局部训练负荷和全身恢复背景。
+当日步数、活动分钟等是分析时的累计快照，不视为全天总量，不据普通步数增长推断新增正式训练。
 使用睡眠、HRV、夜间心率、Readiness及contributors（含Recovery Index）、温度偏移和可用活动数据。Recovery Index只反映夜间心率下降后的恢复睡眠时段，不能解释为全身或肌肉恢复百分比；单个高分不能抵消其它异常或保证可高负荷训练。指标缺失不可编造。pending_main时不要解读片段为整晚睡眠。
 不能用负荷模型点数诊断过度训练、损伤、疾病或确认肌肉恢复。区别实测、主观、推断和不确定性；缺RPE/主观反馈必须降低置信度。疼痛/不适与疲劳分开，瑜伽也不默认适合有肩部不适的人。
 健康背景包含用户报告的Symptom Radar等级、症状和周期阶段，必须保留日期与来源；未报告不等于无症状。经期/经后本身不自动停练或加量，不从温度猜周期。不能用周期解释或忽略喉痛头痛等症状。minor低于major不证明已康复。提供保持/减量/休息/轻量活动的条件分支，以及具体短期调整和长期计划复核点，遵循用户增肌、肌群优先级、日程和肩部注意。分析历史肌群过多或不足时，引用相对个人历史和覆盖情况，不硬套统一组数上限。
@@ -45,7 +47,35 @@ def context(report, recovery_history, sessions, fetched, feedback):
             'calibration_status':report['coach_agent']['calibration_status']}
 
 
-def fingerprint(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+def legacy_fingerprint(value):
+    return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+
+def fingerprint(value):
+    # Oura activity for the report day is a live counter, not a completed day.
+    # Keep the snapshot available as evidence, but don't invalidate a morning
+    # decision whenever steps/sedentary minutes tick. Completed days stay relevant.
+    stable = copy.deepcopy(value)
+    if isinstance(stable, dict) and stable.get('date'):
+        stable.get('recovery', {}).pop('activity', None)
+        for row in stable.get('recovery_history', []):
+            if row.get('date') == stable['date']:
+                row.pop('activity', None)
+    return legacy_fingerprint(stable)
+
+
+def compatible_hash(stored, current, snapshot):
+    current_hash = fingerprint(current)
+    if stored == current_hash:
+        return stored
+    previous = snapshot.get('context')
+    # Only recognize a legacy report if the exact original context was preserved
+    # and its only meaningful difference is today's live activity counters.
+    if (isinstance(previous, dict) and snapshot.get('data_hash') == stored
+            and legacy_fingerprint(previous) == stored
+            and fingerprint(previous) == current_hash):
+        return current_hash
+    return stored
 
 
 def pointer(value,ref):
