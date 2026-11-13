@@ -111,6 +111,8 @@ class FailureNoticeTests(unittest.TestCase):
             revision=push.deliver(app,'2026-11-13',revision=True)
             self.assertEqual(revision['accepted'],1)
             self.assertEqual(push.deliver(app,'2026-11-13',revision=True)['accepted'],0)
-            self.assertEqual(send.call_count,3)
+            self.assertEqual(push.deliver(app,'2026-11-13',revision=2)['accepted'],1)
+            self.assertEqual(push.deliver(app,'2026-11-13',revision=2)['accepted'],0)
+            self.assertEqual(send.call_count,4)
             record=app.load(app.DATA/'push-subscriptions.json')['devices']['test-device']['deliveries']
-            self.assertEqual(set(record),{'2026-11-13:failure','2026-11-13','2026-11-13:revision'})
+            self.assertEqual(set(record),{'2026-11-13:failure','2026-11-13','2026-11-13:revision','2026-11-13:revision2'})

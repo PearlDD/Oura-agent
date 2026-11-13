@@ -42,11 +42,16 @@ def _load_state(app):
 def view(app):
     now = dt.datetime.now(app.TZ)
     poll = app.load(app.DATA / 'wake-poll.json', {})
+    daily = dict(_load_state(app).get(now.date().isoformat(), {}))
+    if daily.get('analyzed_sleep') and not daily.get('analyzed_sleep_end'):
+        recovery = app.recovery_data().get(now.date().isoformat(), {})
+        if sleep_candidate({'recovery': recovery}, now) == daily['analyzed_sleep']:
+            daily['analyzed_sleep_end'] = recovery.get('bedtime_end')
     return {'enabled': os.environ.get('IRON_SCHEDULE_ENABLED') == '1',
             'mode': os.environ.get('IRON_SCHEDULE_MODE', 'fixed'),
             'ai_enabled': os.environ.get('IRON_SCHEDULE_AI') == '1',
             'provider': os.environ.get('IRON_SCHEDULE_AI_PROVIDER', ''),
-            'today': _load_state(app).get(now.date().isoformat(), {}),
+            'today': daily,
             'poll': {k: poll.get(k) for k in ('checked_at', 'message', 'date')},
             'poll_minutes': int(os.environ.get('IRON_WAKE_POLL_SECONDS', '900')) // 60}
 
@@ -72,10 +77,12 @@ def _run_daily(app, now, enforce_hour=True):
     notification = None
     phase = 'sync'
     analyzed_sleep = None
+    analyzed_sleep_end = None
     try:
         app.sync(7, claimed=True)
         report = app.report(d)
         analyzed_sleep = sleep_candidate(report, now)
+        analyzed_sleep_end = report.get('recovery', {}).get('bedtime_end')
         ready = (not app.JOB.get('errors') and report['day_context']['synced']
                  and report['recovery'].get('sleep_hours') is not None
                  and bool(app.settings().get('oura_tokens')))
@@ -114,7 +121,7 @@ def _run_daily(app, now, enforce_hour=True):
             try:
                 import push
                 if _load_state(app).get(d, {}).get('sleep_refreshes', 0):
-                    notification = push.deliver(app, d, revision=True)
+                    notification = push.deliver(app, d, revision=_load_state(app).get(d, {}).get('sleep_refreshes', 0))
                 else:
                     notification = push.deliver(app, d)
             except Exception:
@@ -130,6 +137,8 @@ def _run_daily(app, now, enforce_hour=True):
             state = _load_state(app)
             state[d] = {**state.get(d, {}), 'status': status, 'reason': reason,
                         'notification': notification, 'analyzed_sleep': analyzed_sleep,
+                        'analyzed_sleep_end': analyzed_sleep_end,
+                        'sleep_versions': list(dict.fromkeys(state.get(d, {}).get('sleep_versions', []) + ([analyzed_sleep] if analyzed_sleep else []))),
                         'failure_stage': phase if status == 'failed' else None,
                         'finished_at': dt.datetime.now(app.TZ).isoformat()}
             app.save(path, state)
@@ -178,7 +187,7 @@ def reconcile(app, now):
         morning_report.generate(cached=False, synchronize=False, runtime=app)
         try:
             if previous.get('sleep_refreshes', 0):
-                notification = push.deliver(app, d, revision=True)
+                notification = push.deliver(app, d, revision=previous.get('sleep_refreshes', 0))
             else:
                 notification = push.deliver(app, d)
         except Exception:
@@ -189,6 +198,8 @@ def reconcile(app, now):
                         'reason': '已核对并保存今日有效 AI 分析；未再次调用模型。',
                         'failure_stage': None, 'notification': notification,
                         'analyzed_sleep': sleep_candidate(report, now),
+                        'analyzed_sleep_end': report.get('recovery', {}).get('bedtime_end'),
+                        'sleep_versions': list(dict.fromkeys(previous.get('sleep_versions', []) + [sleep_candidate(report, now)])),
                         'finished_at': dt.datetime.now(app.TZ).isoformat()}
             app.save(app.DATA / 'cloud-runs.json', state)
         return True
@@ -267,19 +278,22 @@ def run_wake_due(app, now):
             existing = state.get(d, {})
             if existing.get('status') not in TERMINAL:
                 state[d] = {**existing, 'status': 'waiting_for_sleep', 'reason': message}
-            elif existing.get('status') == 'complete':
+            elif existing.get('status') in ('complete', 'failed', 'incomplete'):
                 analyzed = existing.get('analyzed_sleep') or (previous.get('candidate') if previous.get('date') == d else None)
                 if analyzed and candidate and candidate != analyzed:
+                    processed = existing.get('sleep_versions', []) + [analyzed]
+                    seen = candidate in processed
                     state[d] = {**existing, 'update_available': True,
-                                'reason': ('Oura 数据再次更新；已达今日自动修订上限，请在面板重新分析。'
-                                           if existing.get('sleep_refreshes', 0) >= 1 else
+                                'reason': ('此睡眠版本已处理；如需重新生成，请在面板手动分析。' if seen else
                                            'Oura 睡眠/恢复数据已更新，等待稳定后更新分析。')}
-                    if ready and existing.get('sleep_refreshes', 0) < 1:
+                    if ready and not seen:
                         state[d] = {**state[d], 'status': 'waiting_for_sleep',
                                     'sleep_refreshes': existing.get('sleep_refreshes', 0) + 1,
                                     'update_available': False}
                 elif not existing.get('analyzed_sleep') and analyzed:
                     state[d] = {**existing, 'analyzed_sleep': analyzed}
+                elif candidate == analyzed and not existing.get('analyzed_sleep_end'):
+                    state[d] = {**existing, 'analyzed_sleep_end': report.get('recovery', {}).get('bedtime_end')}
             app.save(app.DATA / 'cloud-runs.json', state)
             app.JOB['message'] = message
     except Exception:

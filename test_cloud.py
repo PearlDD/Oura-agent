@@ -162,7 +162,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(fetch.call_count,2);ai.assert_not_called()
         self.assertEqual(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['status'],'failed')
 
-    def test_completed_report_monitors_later_upload_and_caps_automatic_revision(self):
+    def test_each_new_stable_sleep_version_can_trigger_another_revision(self):
         original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
         app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'complete','analyzed_sleep':original}})
         self.recovery['sleep_hours']=9
@@ -173,8 +173,11 @@ class ReliabilityTests(unittest.TestCase):
             self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
             self.assertEqual(run.call_count,1)
             state=app.load(app.DATA/'cloud-runs.json');state['2026-11-10']['status']='complete';app.save(app.DATA/'cloud-runs.json',state)
+            self.recovery['sleep_hours']=9.2
+            self.recovery['bedtime_end']='2026-11-10T09:45:00-05:00'
             self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
-            self.assertEqual(run.call_count,1)
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=45)))
+            self.assertEqual(run.call_count,2)
 
     def test_unchanged_complete_day_does_not_call_model(self):
         original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
@@ -204,3 +207,17 @@ class ReliabilityTests(unittest.TestCase):
             self.assertTrue(cloud._run_daily(app,self.now,enforce_hour=False))
         saved=app.load(app.DATA/'cloud-runs.json')['2026-11-10']
         self.assertEqual(saved['failure_stage'],'analysis');self.assertIn('校验',saved['reason']);self.assertNotIn('SECRET',str(saved))
+
+    def test_previously_processed_snapshot_does_not_bill_again_if_oura_reverts(self):
+        candidate=cloud.sleep_candidate({'recovery':self.recovery},self.now)
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'complete','analyzed_sleep':'another-snapshot','sleep_versions':[candidate]}})
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'),patch.object(app,'report',return_value={'recovery':self.recovery}),patch.object(cloud,'_run_daily') as run:
+            cloud.run_due(app,self.now);cloud.run_due(app,self.now+dt.timedelta(minutes=15))
+            run.assert_not_called()
+
+    def test_failed_old_snapshot_allows_distinct_new_stable_snapshot(self):
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'failed','analyzed_sleep':'old-failed','sleep_versions':['old-failed']}})
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'),patch.object(app,'report',return_value={'recovery':self.recovery}),patch.object(cloud,'_run_daily',return_value=True) as run:
+            self.assertFalse(cloud.run_due(app,self.now))
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            run.assert_called_once()

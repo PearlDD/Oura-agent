@@ -15,6 +15,7 @@ window.renderAutomation=function(automation,notice){
   document.getElementById('automation-badge').textContent=automation.enabled?(names[run.status]||'自动检查中'):'尚未启用';
   const mode=automation.mode==='wake'?`Oura 数据就绪后自动分析 · 每 ${automation.poll_minutes} 分钟检查`:'固定时间运行';
   document.getElementById('automation-status').textContent=automation.enabled?mode+'。'+(run.reason||automation.poll?.message||'等待今天的数据。'):'自动任务尚未启用，历史报告仍可查看。';
+  if(run.analyzed_sleep_end)document.getElementById('automation-status').textContent+=' 本版依据：睡眠结束于 '+new Date(run.analyzed_sleep_end).toLocaleString('zh-CN',{timeZone:state.timezone})+'；后续补传会再核对。';
   if(run.finished_at)document.getElementById('automation-status').textContent+=' 最近处理：'+new Date(run.finished_at).toLocaleString('zh-CN',{timeZone:state.timezone})+'。';
   if(run.notification?.accepted)document.getElementById('automation-status').textContent+=' 推送服务已接受状态通知；是否显示仍取决于手机通知设置。';
   if(run.notification?.failed)document.getElementById('automation-status').textContent+=' 通知发送失败，请测试手机通知。';

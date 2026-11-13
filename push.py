@@ -123,7 +123,9 @@ def send(app, subscription, date, test=False, failure=False):
 
 
 def deliver(app, date, device_id=None, test=False, failure=False, revision=False):
-    delivery_key = date + ':failure' if failure else date + ':revision' if revision else date
+    revision_number = max(0, int(revision))
+    suffix = ':revision' + (str(revision_number) if revision_number > 1 else '')
+    delivery_key = date + ':failure' if failure else date + suffix if revision_number else date
     path = app.DATA / 'push-subscriptions.json'
     with app.LOCK:
         state = app.load(path, {'devices': {}})

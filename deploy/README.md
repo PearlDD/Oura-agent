@@ -68,8 +68,10 @@ readiness proxy, not real-time detection that the user is awake. Open the Oura A
 after waking so the ring can upload. Fragments, future/old sleep end dates, missing
 scores and failed polls cannot trigger AI. Poll failures retry at the normal interval
 without a model request. A failed model attempt is not automatically repeated after restart. Completed days
-continue polling Oura. A changed, stable sleep/recovery snapshot can trigger at most
-one automatic revision per day; further changes are marked for explicit review.
+continue polling Oura. Each changed, stable sleep/recovery snapshot can trigger another automatic revision.
+Processed snapshot fingerprints are retained for the day to avoid repeatedly billing
+the same version, including failed versions. Revisions have separate notification
+deduplication keys. Further distinct versions can incur additional API fees.
 A successful manual analysis is reconciled/exported and notified without another
 model request. The protected page provides an explicit retry for failed or
 incomplete analysis. An already-fresh report from the same model can be reused.
