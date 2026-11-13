@@ -772,11 +772,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not auth.enabled(sys.modules[__name__]) or auth.current(sys.modules[__name__], self.headers):
                     return self.redirect('/')
                 self.reply((ROOT / 'static/login.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
+            elif p == '/api/csrf':
+                self.reply({'token': NONCE})
             elif p == '/api/auth/sessions':
                 self.reply(auth.sessions(sys.modules[__name__], self.headers))
             elif p == '/':
                 self.reply((ROOT / 'static/index.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
-            elif p in ('/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
+            elif p in ('/api.js', '/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
                 mime = ('text/javascript' if p.endswith('.js') else 'text/css' if p.endswith('.css') else
                         'image/png' if p.endswith('.png') else 'application/manifest+json')
                 self.reply((ROOT / 'static' / p[1:]).read_bytes(), mime=mime)
@@ -833,8 +835,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global JOB
-        if not self.allowed() or not secrets.compare_digest(self.headers.get('X-Iron-Token', ''), NONCE):
-            return self.reply({'error': '请求校验失败，请刷新页面'}, 403)
+        if not self.allowed():
+            return self.reply({'error': '请求来源校验失败。'}, 403)
+        if not secrets.compare_digest(self.headers.get('X-Iron-Token', ''), NONCE):
+            return self.reply({'error': '页面校验已更新，请重试。', 'code': 'csrf_expired'}, 403)
         if PUBLIC_URL and self.headers.get('Origin') not in (None, PUBLIC_URL):
             return self.reply({'error': '请求来源无效。'}, 403)
         try:

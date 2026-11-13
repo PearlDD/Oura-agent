@@ -114,3 +114,26 @@ class AuthTests(unittest.TestCase):
     def test_misconfigured_cloud_auth_fails_closed(self):
         with patch.dict(os.environ,{'IRON_LOGIN_HASH':''}):
             with self.assertRaises(ValueError):auth.validate(app)
+
+
+    def test_expired_csrf_is_rejected_before_action_and_can_be_refreshed(self):
+        session=self.cookie_headers(self.login())
+        handler=self.handler('/api/auth/logout',{},headers=session)
+        handler.headers['X-Iron-Token']='old-process-token'
+        handler.do_POST()
+        self.assertEqual(handler.captured_status,403)
+        self.assertEqual(json.loads(handler.wfile.getvalue())['code'],'csrf_expired')
+        self.assertIsNotNone(auth.current(app,session))
+        refresh=self.handler('/api/csrf');refresh.do_GET()
+        self.assertEqual(refresh.captured_status,200)
+        self.assertEqual(json.loads(refresh.wfile.getvalue()),{'token':app.NONCE})
+        handler=self.handler('/api/auth/logout',{},headers=session);handler.do_POST()
+        self.assertEqual(handler.captured_status,200);self.assertIsNone(auth.current(app,session))
+
+    def test_csrf_refresh_still_requires_trusted_host_proxy_and_does_not_allow_cross_origin_post(self):
+        handler=self.handler('/api/csrf',headers={'Host':'untrusted.example'});handler.do_GET()
+        self.assertEqual(handler.captured_status,403)
+        session=self.cookie_headers(self.login())
+        handler=self.handler('/api/auth/logout',{},headers={**session,'Origin':'https://untrusted.example'})
+        handler.do_POST();self.assertEqual(handler.captured_status,403)
+        self.assertIsNotNone(auth.current(app,session))

@@ -8,7 +8,7 @@ from http.cookies import SimpleCookie
 COOKIE = '__Host-iron-session'
 REMEMBER_SECONDS = 90 * 86400
 SHORT_SECONDS = 86400
-PUBLIC_PATHS = {'/login', '/login.js', '/style.css', '/manifest.webmanifest',
+PUBLIC_PATHS = {'/login', '/login.js', '/api.js', '/api/csrf', '/style.css', '/manifest.webmanifest',
                 '/icon-192.png', '/icon-512.png', '/sw.js'}
 ATTEMPTS = {}
 

@@ -1,13 +1,5 @@
 const $ = id => document.getElementById(id);
-const csrf = document.querySelector('meta[name="iron-token"]').content;
 let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscleData, coachData, feedbackDirty=false;
-async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Iron-Token':csrf},body:JSON.stringify(body)});
-  const data = await res.json();
-  if(res.status===401&&data.login_required){window.location.assign('/login');throw new Error('请重新登录。');}
-  if (!res.ok) throw new Error(data.error || '操作失败');
-  return data;
-}
 function status(text, error=false) { $('status').textContent=text; $('status').classList.toggle('error',error); }
 function text(tag, value, className) {const el=document.createElement(tag);el.textContent=value;if(className)el.className=className;return el;}
 function fmt(v, digits=0) {return v == null ? '—' : Number(v).toFixed(digits);}
