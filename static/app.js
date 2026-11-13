@@ -362,4 +362,14 @@ $('chat-form').onsubmit=async e=>{
   catch(e){if(chatDate===d)chatStatus(e.message+' 问题仍保留，可重试。',true);}
   finally{chatSending=false;$('chat-send').disabled=!chatState?.ready||chatState?.busy;$('chat-new').disabled=!!chatState?.busy;}
 };
-(async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));},1800);}catch(e){status('服务连接失败：'+e.message,true);}})();
+let lastIdleRefresh=Date.now(),refreshInFlight=false;
+async function refreshLiveReport(){
+  if(refreshInFlight||document.hidden)return;
+  refreshInFlight=true;
+  try{await refreshStatus();if(!wasRunning)await refreshReport();lastIdleRefresh=Date.now();}
+  catch(e){status(e.message,true);}
+  finally{refreshInFlight=false;}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshLiveReport();});
+window.addEventListener('pageshow',event=>{if(event.persisted)refreshLiveReport();});
+(async()=>{try{await refreshStatus();await refreshReport();polling=setInterval(()=>{if(wasRunning)refreshStatus().catch(e=>status(e.message,true));else if(Date.now()-lastIdleRefresh>=60000)refreshLiveReport();},1800);}catch(e){status('服务连接失败：'+e.message,true);}})();

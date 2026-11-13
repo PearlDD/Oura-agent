@@ -99,3 +99,18 @@ class PushTests(unittest.TestCase):
             with patch.object(requests.Session, 'request', capture):
                 push.send(app, info, '2026-11-10')
             self.assertEqual(len(calls), 1)
+
+class FailureNoticeTests(unittest.TestCase):
+    def test_failed_and_successful_notices_are_separately_deduplicated(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(app,'DATA',Path(folder)),patch('push.send') as send:
+            app.save(app.DATA/'push-subscriptions.json',{'devices':{'test-device':{'subscription':{'endpoint':'not-used'}}}})
+            first=push.deliver(app,'2026-11-13',failure=True)
+            again=push.deliver(app,'2026-11-13',failure=True)
+            success=push.deliver(app,'2026-11-13')
+            self.assertEqual((first['accepted'],again['accepted'],success['accepted']),(1,0,1))
+            revision=push.deliver(app,'2026-11-13',revision=True)
+            self.assertEqual(revision['accepted'],1)
+            self.assertEqual(push.deliver(app,'2026-11-13',revision=True)['accepted'],0)
+            self.assertEqual(send.call_count,3)
+            record=app.load(app.DATA/'push-subscriptions.json')['devices']['test-device']['deliveries']
+            self.assertEqual(set(record),{'2026-11-13:failure','2026-11-13','2026-11-13:revision'})

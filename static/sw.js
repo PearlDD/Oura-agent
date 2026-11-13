@@ -4,10 +4,10 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
 self.addEventListener('push', event => {
   let data={};try{data=event.data?.json()||{};}catch(_){}
   // Fixed text keeps health indicators off the lock screen, even for malformed payloads.
-  const test=data.tag==='iron-test';
-  event.waitUntil(self.registration.showNotification(test?'通知测试':'训练晨报已更新',{
-    body:test?'手机通知连接成功，点击打开网页。':'登录后查看今天的分析与训练安排。',
-    icon:'/icon-192.png',badge:'/icon-192.png',tag:test?'iron-test':'iron-report',
+  const test=data.tag==='iron-test',failure=/^iron-failure-\d{4}-\d{2}-\d{2}$/.test(data.tag||'');
+  event.waitUntil(self.registration.showNotification(test?'通知测试':failure?'晨报暂未完成':'训练晨报已更新',{
+    body:test?'手机通知连接成功，点击打开网页。':failure?'请打开网页查看任务状态。':'登录后查看今天的分析与训练安排。',
+    icon:'/icon-192.png',badge:'/icon-192.png',tag:test?'iron-test':(/^iron-(?:report|failure)-\d{4}-\d{2}-\d{2}$/.test(data.tag||'')?data.tag:'iron-report'),
     data:{url: typeof data.url==='string'&&/^\/\?date=\d{4}-\d{2}-\d{2}$/.test(data.url)?data.url:'/'}
   }));
 });

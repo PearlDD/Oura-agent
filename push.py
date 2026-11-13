@@ -100,7 +100,7 @@ def unsubscribe(app, body):
     return {'ok': True}
 
 
-def send(app, subscription, date, test=False):
+def send(app, subscription, date, test=False, failure=False):
     from pywebpush import webpush
     import requests
     class NoRedirectSession(requests.Session):
@@ -108,10 +108,10 @@ def send(app, subscription, date, test=False):
             kwargs['allow_redirects'] = False
             return super().request(method, url, **kwargs)
     subscription = validate_subscription(app, subscription)
-    payload = {'title': '通知测试' if test else '训练晨报已更新',
-               'body': '手机通知连接成功，点击打开网页。' if test else '登录后查看今天的分析与训练安排。',
+    payload = {'title': '通知测试' if test else '晨报暂未完成' if failure else '训练晨报已更新',
+               'body': '手机通知连接成功，点击打开网页。' if test else '请打开网页查看任务状态。' if failure else '登录后查看今天的分析与训练安排。',
                'url': '/' if test else '/?date=' + app.day(date),
-               'tag': 'iron-test' if test else 'iron-report-' + app.day(date)}
+               'tag': 'iron-test' if test else ('iron-failure-' if failure else 'iron-report-') + app.day(date)}
     with NoRedirectSession() as session:
         response = webpush(subscription_info=subscription, data=json.dumps(payload, ensure_ascii=False),
                            vapid_private_key=str(app.DATA / 'push-vapid.pem'),
@@ -122,7 +122,8 @@ def send(app, subscription, date, test=False):
         raise app.AppError('推送服务未接受通知。')
 
 
-def deliver(app, date, device_id=None, test=False):
+def deliver(app, date, device_id=None, test=False, failure=False, revision=False):
+    delivery_key = date + ':failure' if failure else date + ':revision' if revision else date
     path = app.DATA / 'push-subscriptions.json'
     with app.LOCK:
         state = app.load(path, {'devices': {}})
@@ -143,13 +144,16 @@ def deliver(app, date, device_id=None, test=False):
                 current['test_at'] = time.time()
             else:
                 deliveries = current.setdefault('deliveries', {})
-                if date in deliveries:
+                if delivery_key in deliveries:
                     continue
-                deliveries[date] = {'status': 'sending', 'at': time.time()}
+                deliveries[delivery_key] = {'status': 'sending', 'at': time.time()}
             app.save(path, state)
         status, expired = 'accepted', False
         try:
-            send(app, device['subscription'], date, test)
+            if failure:
+                send(app, device['subscription'], date, test, failure=True)
+            else:
+                send(app, device['subscription'], date, test)
             sent += 1
         except Exception as error:
             # Exceptions may contain private endpoint URLs; never serialize or log them.
@@ -165,6 +169,6 @@ def deliver(app, date, device_id=None, test=False):
                 if test:
                     current['test_status'] = status
                 else:
-                    current.setdefault('deliveries', {})[date] = {'status': status, 'at': time.time()}
+                    current.setdefault('deliveries', {})[delivery_key] = {'status': status, 'at': time.time()}
             app.save(path, state)
     return {'accepted': sent, 'failed': failed, 'device_count': len(selected)}

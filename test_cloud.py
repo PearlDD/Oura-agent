@@ -150,3 +150,57 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(saved['status'],'complete')
         self.assertEqual(saved['notification']['failed'],1)
         self.assertNotIn('SECRET',str(saved))
+
+class ReliabilityTests(unittest.TestCase):
+    setUp = WakeTests.setUp
+    tearDown = WakeTests.tearDown
+    def test_failed_day_keeps_syncing_oura_without_rebilling(self):
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'failed','reason':'previous failure'}})
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura') as fetch,patch.object(app,'report',return_value={'recovery':self.recovery}),patch.object(app,'ai_report') as ai:
+            self.assertFalse(cloud.run_due(app,self.now))
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            self.assertEqual(fetch.call_count,2);ai.assert_not_called()
+        self.assertEqual(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['status'],'failed')
+
+    def test_completed_report_monitors_later_upload_and_caps_automatic_revision(self):
+        original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'complete','analyzed_sleep':original}})
+        self.recovery['sleep_hours']=9
+        self.recovery['bedtime_end']='2026-11-10T09:30:00-05:00'
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'),patch.object(app,'report',return_value={'recovery':self.recovery}),patch.object(cloud,'_run_daily',return_value=True) as run:
+            self.assertFalse(cloud.run_due(app,self.now))
+            self.assertTrue(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['update_available'])
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            self.assertEqual(run.call_count,1)
+            state=app.load(app.DATA/'cloud-runs.json');state['2026-11-10']['status']='complete';app.save(app.DATA/'cloud-runs.json',state)
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
+            self.assertEqual(run.call_count,1)
+
+    def test_unchanged_complete_day_does_not_call_model(self):
+        original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'complete','analyzed_sleep':original}})
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura') as fetch,patch.object(app,'report',return_value={'recovery':self.recovery}),patch.object(cloud,'_run_daily') as run:
+            cloud.run_due(app,self.now);cloud.run_due(app,self.now+dt.timedelta(minutes=15))
+            self.assertEqual(fetch.call_count,2);run.assert_not_called()
+
+    def test_manual_success_reconciles_failure_and_sends_once_without_model(self):
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'failed','attempts':1}})
+        report={'recovery':self.recovery,'decision':{'stale':False,'source':'OpenAI / chosen-model'}}
+        with patch.dict('os.environ',{'IRON_SCHEDULE_AI':'1','IRON_SCHEDULE_AI_PROVIDER':'openai'}),patch.object(app.providers,'config',return_value={'provider':'openai','label':'OpenAI','model':'chosen-model'}),patch.object(app,'report',return_value=report),patch.object(app,'ai_report') as ai,patch('morning_report.generate') as export,patch('push.deliver',return_value={'accepted':1,'failed':0,'device_count':1}) as push:
+            self.assertTrue(cloud.reconcile(app,self.now));self.assertFalse(cloud.reconcile(app,self.now))
+            ai.assert_not_called();export.assert_called_once();push.assert_called_once()
+        self.assertEqual(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['status'],'complete')
+        self.assertFalse(app.JOB['running'])
+
+    def test_stale_or_different_provider_cannot_reconcile_or_push(self):
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{'status':'failed'}})
+        for record in ({'stale':True,'source':'OpenAI / chosen-model'},{'stale':False,'source':'Other / model'}):
+            with patch.dict('os.environ',{'IRON_SCHEDULE_AI':'1','IRON_SCHEDULE_AI_PROVIDER':'openai'}),patch.object(app.providers,'config',return_value={'provider':'openai','label':'OpenAI','model':'chosen-model'}),patch.object(app,'report',return_value={'decision':record}),patch('push.deliver') as push:
+                self.assertFalse(cloud.reconcile(app,self.now));push.assert_not_called()
+
+    def test_validation_failure_is_distinguished_without_persisting_exception(self):
+        report={'day_context':{'synced':True},'recovery':self.recovery}
+        with patch.dict('os.environ',{'IRON_SCHEDULE_AI':'1','IRON_SCHEDULE_AI_PROVIDER':'openai'}),patch.object(app.providers,'config',return_value={'provider':'openai','label':'OpenAI','model':'chosen-model'}),patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}),patch.object(app,'sync'),patch.object(app,'report',return_value=report),patch.object(app,'ai_report',side_effect=ValueError('SECRET')),patch('morning_report.generate'):
+            self.assertTrue(cloud._run_daily(app,self.now,enforce_hour=False))
+        saved=app.load(app.DATA/'cloud-runs.json')['2026-11-10']
+        self.assertEqual(saved['failure_stage'],'analysis');self.assertIn('校验',saved['reason']);self.assertNotIn('SECRET',str(saved))

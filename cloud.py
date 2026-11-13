@@ -47,7 +47,7 @@ def view(app):
             'ai_enabled': os.environ.get('IRON_SCHEDULE_AI') == '1',
             'provider': os.environ.get('IRON_SCHEDULE_AI_PROVIDER', ''),
             'today': _load_state(app).get(now.date().isoformat(), {}),
-            'poll': {k: poll.get(k) for k in ('checked_at', 'message')},
+            'poll': {k: poll.get(k) for k in ('checked_at', 'message', 'date')},
             'poll_minutes': int(os.environ.get('IRON_WAKE_POLL_SECONDS', '900')) // 60}
 
 
@@ -70,15 +70,19 @@ def _run_daily(app, now, enforce_hour=True):
         app.JOB['running'] = True
     status, reason, analysis_ready = 'complete', '', False
     notification = None
+    phase = 'sync'
+    analyzed_sleep = None
     try:
         app.sync(7, claimed=True)
         report = app.report(d)
+        analyzed_sleep = sleep_candidate(report, now)
         ready = (not app.JOB.get('errors') and report['day_context']['synced']
                  and report['recovery'].get('sleep_hours') is not None
                  and bool(app.settings().get('oura_tokens')))
         if not ready:
             status, reason = 'incomplete', '数据未齐或同步失败；未请求 AI，等待手动同步后复核。'
         elif os.environ.get('IRON_SCHEDULE_AI') == '1':
+            phase = 'analysis'
             configured = app.providers.config(app)
             if os.environ.get('IRON_SCHEDULE_AI_PROVIDER') != configured['provider']:
                 status, reason = 'incomplete', '定时 AI 提供商未确认；未发送数据。'
@@ -87,6 +91,7 @@ def _run_daily(app, now, enforce_hour=True):
                 source = configured['label'] + ' / ' + configured['model']
                 reused = bool(record and not record.get('stale') and record.get('source') == source)
                 if not reused:
+                    phase = 'analysis'
                     app.ai_report(d)
                 latest = app.report(d).get('decision') or {}
                 analysis_ready = bool(latest and not latest.get('stale') and latest.get('source') == source)
@@ -96,28 +101,106 @@ def _run_daily(app, now, enforce_hour=True):
                     reason = '复用今日已生成的有效 AI 分析。' if reused else '今日 AI 分析已生成。'
         else:
             reason = '仅生成数据报告；定时 AI 未启用。'
-    except Exception:
-        status, reason = 'failed', '自动分析未完成；请检查模型额度、数据连接或在面板手动重试。'
+    except Exception as error:
+        status = 'failed'
+        reason = failure_reason(error, phase)
     finally:
         try:
             import morning_report
             morning_report.generate(cached=False, synchronize=False, runtime=app)
         except Exception:
-            status, reason = 'failed', '报告未能完整保存；请在受保护面板检查。'
+            status, reason, phase = 'failed', '报告未能完整保存；请在受保护面板检查。', 'export'
         if status == 'complete' and analysis_ready:
             try:
                 import push
-                notification = push.deliver(app, d)
+                if _load_state(app).get(d, {}).get('sleep_refreshes', 0):
+                    notification = push.deliver(app, d, revision=True)
+                else:
+                    notification = push.deliver(app, d)
+            except Exception:
+                notification = {'accepted': 0, 'failed': 1, 'device_count': 0}
+        if status in ('failed', 'incomplete') and os.environ.get('IRON_SCHEDULE_AI') == '1':
+            try:
+                import push
+                notification = push.deliver(app, d, failure=True)
             except Exception:
                 notification = {'accepted': 0, 'failed': 1, 'device_count': 0}
         with app.LOCK:
             app.JOB['running'] = False
             state = _load_state(app)
             state[d] = {**state.get(d, {}), 'status': status, 'reason': reason,
-                        'notification': notification,
+                        'notification': notification, 'analyzed_sleep': analyzed_sleep,
+                        'failure_stage': phase if status == 'failed' else None,
                         'finished_at': dt.datetime.now(app.TZ).isoformat()}
             app.save(path, state)
     return True
+
+
+def failure_reason(error, phase):
+    # Never persist raw exceptions: network/provider errors can contain secrets.
+    if phase == 'sync':
+        return '数据同步阶段失败；未完成今日分析，请核对数据连接。'
+    if isinstance(error, ValueError):
+        return 'AI 回复未通过证据或计划安全校验，未保存为建议；可手动重试。'
+    message = str(error) if type(error).__name__ == 'AppError' else ''
+    if '额度不足' in message:
+        return 'OpenAI API 额度不足，今日分析未完成；请检查账单后重试。'
+    if '数据或计划已变化' in message:
+        return '分析期间数据或计划发生变化，结果未保存；请重新分析。'
+    if '无法连接服务' in message:
+        return 'AI 请求连接失败或超时，结果未保存；请稍后重试。'
+    return 'AI 分析或保存阶段失败；未保存有效建议，可在面板重试。'
+
+
+def reconcile(app, now):
+    """Reuse a successful manual analysis without another model request."""
+    d = now.date().isoformat()
+    with app.LOCK:
+        state = _load_state(app)
+        previous = state.get(d, {})
+        if previous.get('status') not in ('failed', 'incomplete') or app.JOB['running']:
+            return False
+        configured = app.providers.config(app)
+        if (os.environ.get('IRON_SCHEDULE_AI') != '1'
+                or os.environ.get('IRON_SCHEDULE_AI_PROVIDER') != configured['provider']):
+            return False
+        report = app.report(d)
+        record = report.get('decision') or {}
+        source = configured['label'] + ' / ' + configured['model']
+        if not record or record.get('stale') or record.get('source') != source:
+            return False
+        app.JOB['running'] = True
+        state[d] = {**previous, 'status': 'running', 'reason': '正在保存已生成的有效分析…'}
+        app.save(app.DATA / 'cloud-runs.json', state)
+    try:
+        import morning_report
+        import push
+        morning_report.generate(cached=False, synchronize=False, runtime=app)
+        try:
+            if previous.get('sleep_refreshes', 0):
+                notification = push.deliver(app, d, revision=True)
+            else:
+                notification = push.deliver(app, d)
+        except Exception:
+            notification = {'accepted': 0, 'failed': 1, 'device_count': 0}
+        with app.LOCK:
+            state = _load_state(app)
+            state[d] = {**state.get(d, {}), 'status': 'complete',
+                        'reason': '已核对并保存今日有效 AI 分析；未再次调用模型。',
+                        'failure_stage': None, 'notification': notification,
+                        'analyzed_sleep': sleep_candidate(report, now),
+                        'finished_at': dt.datetime.now(app.TZ).isoformat()}
+            app.save(app.DATA / 'cloud-runs.json', state)
+        return True
+    except Exception:
+        with app.LOCK:
+            state = _load_state(app)
+            state[d] = {**state.get(d, {}), 'status': 'failed', 'failure_stage': 'export',
+                        'reason': 'AI 分析已生成，但报告导出未完成；稍后重新核对。'}
+            app.save(app.DATA / 'cloud-runs.json', state)
+        return False
+    finally:
+        app.JOB['running'] = False
 
 
 def sleep_candidate(report, now):
@@ -144,8 +227,11 @@ def run_wake_due(app, now):
     interval = max(60, int(os.environ.get('IRON_WAKE_POLL_SECONDS', '900')))
     stable = max(60, int(os.environ.get('IRON_WAKE_STABLE_SECONDS', '900')))
     path = app.DATA / 'wake-poll.json'
+    if reconcile(app, now):
+        return True
     with app.LOCK:
-        if _load_state(app).get(d, {}).get('status') in TERMINAL or app.JOB['running']:
+        daily = _load_state(app).get(d, {})
+        if daily.get('status') == 'running' or app.JOB['running']:
             return False
         previous = app.load(path, {})
         if stamp - previous.get('checked_at', 0) < interval:
@@ -178,7 +264,22 @@ def run_wake_due(app, now):
             app.save(path, {'date': d, 'checked_at': stamp, 'candidate': candidate,
                             'first_seen_at': first_seen, 'message': message})
             state = _load_state(app)
-            state[d] = {**state.get(d, {}), 'status': 'waiting_for_sleep', 'reason': message}
+            existing = state.get(d, {})
+            if existing.get('status') not in TERMINAL:
+                state[d] = {**existing, 'status': 'waiting_for_sleep', 'reason': message}
+            elif existing.get('status') == 'complete':
+                analyzed = existing.get('analyzed_sleep') or (previous.get('candidate') if previous.get('date') == d else None)
+                if analyzed and candidate and candidate != analyzed:
+                    state[d] = {**existing, 'update_available': True,
+                                'reason': ('Oura 数据再次更新；已达今日自动修订上限，请在面板重新分析。'
+                                           if existing.get('sleep_refreshes', 0) >= 1 else
+                                           'Oura 睡眠/恢复数据已更新，等待稳定后更新分析。')}
+                    if ready and existing.get('sleep_refreshes', 0) < 1:
+                        state[d] = {**state[d], 'status': 'waiting_for_sleep',
+                                    'sleep_refreshes': existing.get('sleep_refreshes', 0) + 1,
+                                    'update_available': False}
+                elif not existing.get('analyzed_sleep') and analyzed:
+                    state[d] = {**existing, 'analyzed_sleep': analyzed}
             app.save(app.DATA / 'cloud-runs.json', state)
             app.JOB['message'] = message
     except Exception:
@@ -188,7 +289,7 @@ def run_wake_due(app, now):
             app.JOB['message'] = 'Oura 检查未完成，稍后重试；不会请求 AI。'
     finally:
         app.JOB['running'] = False
-    if ready:
+    if ready and _load_state(app).get(d, {}).get('status') not in TERMINAL:
         return _run_daily(app, now, enforce_hour=False)
     return False
 

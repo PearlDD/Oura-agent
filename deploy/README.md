@@ -67,8 +67,11 @@ stable snapshot for 15 minutes (`IRON_WAKE_STABLE_SECONDS=900`). This is a data
 readiness proxy, not real-time detection that the user is awake. Open the Oura App
 after waking so the ring can upload. Fragments, future/old sleep end dates, missing
 scores and failed polls cannot trigger AI. Poll failures retry at the normal interval
-without a model request. A completed/failed model attempt is not automatically
-repeated after restart. The protected page provides an explicit retry for failed or
+without a model request. A failed model attempt is not automatically repeated after restart. Completed days
+continue polling Oura. A changed, stable sleep/recovery snapshot can trigger at most
+one automatic revision per day; further changes are marked for explicit review.
+A successful manual analysis is reconciled/exported and notified without another
+model request. The protected page provides an explicit retry for failed or
 incomplete analysis. An already-fresh report from the same model can be reused.
 
 `IRON_SCHEDULE_AI=0` generates data reports only. Actual model decisions require
@@ -84,6 +87,8 @@ Use the test button to confirm receipt. A successful push service response means
 accepted for delivery, not proof that the OS displayed it. Focus mode, permissions
 and network delivery still matter.
 
+Success and failure notifications have separate per-date deduplication keys. Failure
+notices only say that the report is not complete and link to the protected status.
 Notifications contain fixed generic text and a report link/date, with no health
 metrics, symptoms or training verdict on the lock screen. Standard Web Push routes
 the encrypted payload through the browser vendor's push service. Private subscriptions
