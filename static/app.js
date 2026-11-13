@@ -34,7 +34,7 @@ async function refreshReport() {
   const d=selected();
   const r=await api('/api/report?date='+d);
   if(selected()!==d)return;
-  renderDecision(r.decision,r.coach_agent.plans[r.date]);renderClues(r);
+  renderDecision(r.decision,r.coach_agent.plans[r.date],r.checkin.plan);renderClues(r);
   renderHealth(r.health_observations,d);
   const fields={sleep:'sleep_hours',hrv:'hrv',rhr:'rhr'};
   for(const [id,key] of Object.entries(fields)) {
@@ -101,22 +101,27 @@ function brief(value,max=82){
   const first=value.split(/(?<=[。！？])/u)[0];
   return first.length>max?first.slice(0,max-1)+'…':first;
 }
-function decisionSignal(record,plan){
+function decisionSignal(record,plan,declaredPlan){
   if(!record||record.stale)return {tone:'neutral',label:record?.stale?'分析已过期':'等待生成分析',english:record?.stale?'REGENERATE ANALYSIS':'WAIT FOR INSIGHT'};
   const v=record.analysis.verdict;
-  if(v==='rest')return {tone:'red',label:'今天先休息',english:'REST & RESET'};
+  if(v==='rest'){
+    const original=['train','rest'].includes(declaredPlan)?declaredPlan:plan?.original_kind||plan?.kind;
+    if(original==='train')return {tone:'red',label:'今天改为休息',english:'REST INSTEAD OF TRAINING'};
+    if(original==='rest')return {tone:'neutral',label:'按计划休息',english:'PLANNED REST'};
+    return {tone:'neutral',label:'先休息，核对原计划',english:'REST · CHECK YOUR PLAN'};
+  }
   if(v==='reduce'||v==='light')return {tone:'amber',label:v==='light'?'轻轻动一动':'放慢一点',english:'GO EASY'};
   if(v==='clarify')return {tone:'neutral',label:'先听听身体怎么说',english:'CHECK IN FIRST'};
   if(plan?.kind!=='train')return {tone:'neutral',label:plan?.kind==='rest'?'按计划休息':'先核对今天的安排',english:plan?.kind==='rest'?'PLANNED REST':'CHECK YOUR PLAN'};
   return {tone:'green',label:'按计划练，稳稳来',english:'READY FOR YOUR PLAN'};
 }
-function renderDecision(record,plan){
+function renderDecision(record,plan,declaredPlan){
   const labels={keep:'保持原安排',reduce:'减量',rest:'休息',light:'轻量活动',clarify:'先补信息'};
-  const a=record?.analysis,signal=decisionSignal(record,plan);
+  const a=record?.analysis,signal=decisionSignal(record,plan,declaredPlan);
   $('decision-panel').dataset.tone=signal.tone;
   $('decision-panel').querySelector('.eyebrow').textContent=record?.stale?'AI 历史分析 · 等待更新':'TODAY’S CALL · AI 今日建议';
   $('decision-signal').textContent=signal.label;$('decision-english').textContent=signal.english;
-  $('decision-verdict').textContent=record?.stale?'待重新生成':a?labels[a.verdict]:'尚无结论';
+  $('decision-verdict').textContent=record?.stale?'待重新生成':a?(a.verdict==='rest'&&signal.english==='PLANNED REST'?'计划休息':labels[a.verdict]):'尚无结论';
   $('decision-headline').textContent=record?.stale?'数据已变化，请重新生成今日分析。':a?.headline||'同步数据后，让 Agent 看看今天适合怎么练。';
   $('decision-rationale').textContent=record?.stale?'下方保留的是上次分析记录，不作为今天训练安排的依据。':a?brief(a.rationale.split(/(?<=[。！？])/u).find(v=>!v.includes('不存在的训练'))||a.rationale,105):'已有规则草案，等待实际 AI 分析。';
   $('decision-full-rationale').textContent=a?.rationale||'';
@@ -155,7 +160,7 @@ function renderCoach(c,d){
   const box=$('coach-plans');box.replaceChildren();
   const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
   for(const p of upcoming){
-    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · 版本 ${p.version}`));
+    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · Agent 起草 · 版本 ${p.version}`));
     const drill=text('details','','plan-drill');drill.append(text('summary','查看安排 ↗'));card.append(text('p',p.kind==='train'?`${p.exercises.length} 个动作 · ${p.exercises.reduce((n,e)=>n+e.sets,0)} 组`:p.kind==='rest'?'恢复 / 自由安排':'先核对限制','plan-preview'));
     const list=text('ul','');for(const e of p.exercises){list.append(text('li',`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}drill.append(list);for(const e of p.exercises)if(e.adaptation)drill.append(text('small',e.name+'：'+e.adaptation));
     const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));drill.append(why);

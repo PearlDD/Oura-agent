@@ -702,7 +702,7 @@ def propose_decision(d):
         if not change:raise AppError('本次分析没有可提交的动作修订。')
         state=load(DATA/'coach-state.json');old=state['plans'][change['date']]
         if old['version']!=change['version']:raise AppError('计划版本已变化。')
-        proposed={**old,'kind':change['kind'],'origin':'agent_analysis','analysis_date':d,'analysis_hash':record['data_hash'],
+        proposed={**old,'kind':change['kind'],'original_kind':old.get('original_kind',old['kind']),'origin':'agent_analysis','analysis_date':d,'analysis_hash':record['data_hash'],
                   'reasons':[record['analysis']['headline']],'status':'draft'}
         proposed.pop('revision_proposal',None)
         previous={e['name']:e for e in old['exercises']}
