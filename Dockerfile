@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certi
 WORKDIR /app
 COPY requirements-cloud.txt /app/
 RUN pip install --no-cache-dir -r requirements-cloud.txt
-COPY app.py cloud.py morning_report.py muscles.py coach.py decision.py chat.py providers.py push.py /app/
+COPY app.py cloud.py morning_report.py muscles.py coach.py decision.py chat.py providers.py push.py auth.py /app/
 COPY static /app/static
 USER iron
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 IRON_DATA_DIR=/data IRON_REPORT_DIR=/reports

@@ -4,6 +4,7 @@ let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscle
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Iron-Token':csrf},body:JSON.stringify(body)});
   const data = await res.json();
+  if(res.status===401&&data.login_required){window.location.assign('/login');throw new Error('请重新登录。');}
   if (!res.ok) throw new Error(data.error || '操作失败');
   return data;
 }
@@ -27,6 +28,7 @@ async function refreshStatus() {
   }
   $('ai-state').textContent=state.ai?'已配置':'可选 · 待配置';
   $('redirect-uri').value=state.redirect_uri;
+  $('login-device-settings').hidden=!state.session_auth;
   if(typeof window.renderAutomation==='function')window.renderAutomation(state.automation,state.push);
   $('sync').disabled=state.job.running;
   const errors=state.job.errors || [];

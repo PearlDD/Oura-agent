@@ -5,11 +5,9 @@
     }
 }
 {$DOMAIN} {
-    basic_auth {
-        {$LOGIN_USER} {$LOGIN_HASH}
-    }
     reverse_proxy app:8765 {
         header_up X-Iron-Proxy-Token {$IRON_PROXY_TOKEN}
+        header_up X-Iron-Client-IP {remote_host}
         header_up -Authorization
     }
 }

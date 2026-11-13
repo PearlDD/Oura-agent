@@ -6,9 +6,10 @@ This directory is a deployment template, not evidence that a server is live.
 ## Boundary
 
 Caddy is the only published service (80/443); the Python app has no host port.
-Caddy issues HTTPS certificates and requires a login on every route, including OAuth.
-A separate proxy token also protects the backend. Do not publish port 8765, remove
-basic_auth, expose the data volumes, or use multiple app replicas. State is JSON;
+Caddy issues HTTPS certificates; the app requires a valid session on private routes,
+including OAuth, APIs and reports. Only the login page and nonsensitive login/PWA assets
+are public. A separate proxy token protects the backend. Do not publish port 8765,
+bypass app session checks, expose data volumes, or use multiple app replicas. State is JSON;
 only one app process may write it. The report runner therefore lives in that process.
 The app runs as UID 10001 with a read-only container filesystem and private data volumes.
 
@@ -28,7 +29,7 @@ The app runs as UID 10001 with a read-only container filesystem and private data
 5. Run `docker compose config --quiet`, build, and validate the Caddyfile using the
    Caddy image before running `docker compose up -d`. Do not print expanded Compose
    configuration into a shared log: it contains the proxy secret.
-6. Before migrating data, verify HTTPS, an anonymous 401, a successful authenticated
+6. Before migrating data, verify HTTPS, an anonymous API 401 / page redirect to login, a successful authenticated
    page, and that port 8765 is unreachable from outside.
 
 ## Private data and cutover
@@ -116,3 +117,29 @@ code/data snapshot, and reauthorizes Oura locally if returning to the Mac.
 Unit tests exercise local defaults, cloud host/proxy rejection, consistent OAuth callback,
 and daily claim/missing-data/failure behavior. A live domain, TLS, Docker build, SSH and
 backup restore must be checked on the actual server before declaring cutover complete.
+
+## Persistent device login
+
+Cloud mode requires `IRON_LOGIN_USER` and `IRON_LOGIN_HASH` (Compose passes the existing
+`LOGIN_USER` / `LOGIN_HASH`). Missing or malformed credentials prevent app startup.
+The bcrypt dependency is pinned in `requirements-cloud.txt`; local loopback mode
+does not require it. Keep the existing password; no provider credentials change.
+
+Remembered sessions last 90 days, or 24 hours server-side for an unremembered browser
+session. The `__Host-iron-session` cookie is Secure, HttpOnly, SameSite=Lax and scoped
+to `/`. Only SHA-256 token digests, credential tags, broad device categories and
+creation/expiry times are persisted in private `/data/login-sessions.json`. This
+file is not an API credential or public asset. Device sessions can be revoked from
+settings. Changing the username/password hash invalidates old sessions. Protect
+backups of this file as private state. Caddy overwrites the client-IP header for
+login rate limiting. The app also checks the CSRF nonce and request Origin.
+
+When upgrading from Basic Auth, keep the old Caddy Basic Auth config active while
+building/restarting the new app with its required login environment. First verify
+that private API routes reject requests without a session, and verify session login
+using the old Basic Auth credential plus the new login cookie. Only then replace
+and reload Caddy with this template. Rollback must restore Basic Auth before
+restoring an old app that has no session checks. Never leave that old app public.
+
+Run `python3 -m unittest -q` after installing cloud requirements for all auth/push
+tests; tests requiring optional dependencies skip when those dependencies are absent.

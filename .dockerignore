@@ -12,3 +12,4 @@
 !static/**
 !push.py
 !requirements-cloud.txt
+!auth.py

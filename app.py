@@ -26,6 +26,7 @@ import chat
 import providers
 import cloud
 import push
+import auth
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR') or str(ROOT.parents[1] / 'work' / 'iron-oura-data'))
@@ -717,7 +718,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # OAuth query strings and health data never enter request logs.
 
-    def reply(self, value, status=200, mime='application/json; charset=utf-8'):
+    def reply(self, value, status=200, mime='application/json; charset=utf-8', headers=None):
         body = json.dumps(value, ensure_ascii=False).encode() if mime.startswith('application/json') else value if isinstance(value, bytes) else value.encode()
         self.send_response(status)
         self.send_header('Content-Type', mime)
@@ -726,14 +727,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
-    def redirect(self, url):
+    def redirect(self, url, headers=None):
         self.send_response(303)
         self.send_header('Location', url)
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Cache-Control', 'no-store')
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
 
     def allowed(self):
@@ -745,10 +750,20 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         p = parsed.path
+        if auth.enabled(sys.modules[__name__]) and p not in auth.PUBLIC_PATHS and not auth.current(sys.modules[__name__], self.headers):
+            if p.startswith('/api/'):
+                return self.reply({'error': '登录已失效，请重新登录。', 'login_required': True}, 401)
+            return self.redirect('/login')
         try:
-            if p == '/':
+            if p == '/login':
+                if not auth.enabled(sys.modules[__name__]) or auth.current(sys.modules[__name__], self.headers):
+                    return self.redirect('/')
+                self.reply((ROOT / 'static/login.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
+            elif p == '/api/auth/sessions':
+                self.reply(auth.sessions(sys.modules[__name__], self.headers))
+            elif p == '/':
                 self.reply((ROOT / 'static/index.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
-            elif p in ('/app.js', '/style.css', '/push.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
+            elif p in ('/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
                 mime = ('text/javascript' if p.endswith('.js') else 'text/css' if p.endswith('.css') else
                         'image/png' if p.endswith('.png') else 'application/manifest+json')
                 self.reply((ROOT / 'static' / p[1:]).read_bytes(), mime=mime)
@@ -760,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
             elif p == '/api/status':
                 s = settings()
                 _, dates = training_data()
-                self.reply({'today': today().isoformat(), 'timezone': str(TZ), 'xunji': bool(s.get('xunji_key')),
+                self.reply({'session_auth': auth.enabled(sys.modules[__name__]), 'today': today().isoformat(), 'timezone': str(TZ), 'xunji': bool(s.get('xunji_key')),
                             'oura': bool(s.get('oura_tokens')), 'oura_configured': bool(s.get('oura_client_id') and s.get('oura_client_secret')),
                             'ai':providers.ready(sys.modules[__name__]),'model':providers.config(sys.modules[__name__])['model'],
                             'ai_provider':s.get('ai_provider','openai'),'ai_models':{k:s.get(k+'_model','') for k in ('openai','gemini')},
@@ -807,6 +822,8 @@ class Handler(BaseHTTPRequestHandler):
         global JOB
         if not self.allowed() or not secrets.compare_digest(self.headers.get('X-Iron-Token', ''), NONCE):
             return self.reply({'error': '请求校验失败，请刷新页面'}, 403)
+        if PUBLIC_URL and self.headers.get('Origin') not in (None, PUBLIC_URL):
+            return self.reply({'error': '请求来源无效。'}, 403)
         try:
             size = int(self.headers.get('Content-Length', 0))
             if not 0 < size <= 100_000:
@@ -815,7 +832,20 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise AppError('请求格式无效。')
             p = urllib.parse.urlparse(self.path).path
-            if p == '/api/push/subscribe':
+            if auth.enabled(sys.modules[__name__]) and p != '/api/auth/login' and not auth.current(sys.modules[__name__], self.headers):
+                return self.reply({'error': '登录已失效，请重新登录。', 'login_required': True}, 401)
+            if p == '/api/auth/login':
+                if not auth.enabled(sys.modules[__name__]):
+                    raise AppError('本机模式无需网页登录。')
+                cookie = auth.login(sys.modules[__name__], body, self.headers)
+                self.reply({'ok': True}, headers={'Set-Cookie': cookie})
+            elif p in ('/api/auth/logout', '/api/auth/revoke'):
+                result = auth.revoke(sys.modules[__name__], self.headers,
+                                     target=body.get('session_id') if p.endswith('/revoke') else None,
+                                     others=body.get('others') is True and p.endswith('/revoke'))
+                headers = {'Set-Cookie': auth.cookie('', clear=True)} if result['logged_out'] else {}
+                self.reply(result, headers=headers)
+            elif p == '/api/push/subscribe':
                 self.reply(push.subscribe(sys.modules[__name__], body))
             elif p == '/api/push/unsubscribe':
                 self.reply(push.unsubscribe(sys.modules[__name__], body))
@@ -905,6 +935,7 @@ def main():
     if args.report:
         print(markdown(report(day(args.report))))
         return
+    auth.validate(sys.modules[__name__])
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     cloud.start(sys.modules[__name__])
     print('Iron / Oura 已启动：' + (PUBLIC_URL or f'http://127.0.0.1:{PORT}'), flush=True)

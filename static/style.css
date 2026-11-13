@@ -31,3 +31,5 @@
 #gemini-fields .consent{display:flex;align-items:flex-start;gap:8px;font-size:11px;line-height:1.8}#gemini-paid{width:auto;flex:0 0 auto;margin:3px 0 0}#ai-provider{margin-bottom:6px}
 
 .automation-panel{margin-bottom:24px}.automation-panel h2{font-size:1.15rem}.automation-actions{display:flex;gap:10px;flex-wrap:wrap}.automation-panel p{margin:10px 0}.automation-panel .footnote{max-width:75ch}
+
+.login-page{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(100%,430px);margin:0;padding:32px;background:var(--paper,#fffef8);border:1px solid #d9decf;border-radius:20px}.login-card h1{font-size:2rem;line-height:1.15}.login-card label{display:flex;gap:10px;align-items:center;margin-top:18px}.login-card input:not([type=checkbox]){width:100%;box-sizing:border-box;margin-top:8px}.login-card button{margin-top:18px}.login-card input[type=checkbox]{width:auto}.login-device-list{padding:0;list-style:none}.login-device-list li{display:flex;gap:12px;align-items:center;justify-content:space-between;border-top:1px solid #d9decf;padding:12px 0;flex-wrap:wrap}

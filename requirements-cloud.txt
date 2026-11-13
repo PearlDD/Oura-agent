@@ -1,2 +1,4 @@
 # Optional on local installs; required by the supplied cloud image for Web Push.
 pywebpush==2.5.0
+
+bcrypt==5.0.0
