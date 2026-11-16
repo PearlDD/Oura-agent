@@ -9,33 +9,56 @@ function pushButtons(enabled){
   document.getElementById('push-test').disabled=!enabled;
   document.getElementById('push-disable').hidden=!enabled;
 }
-window.renderAutomation=function(automation,notice){
+window.renderAutomation=function(automation,notice,timezone='America/New_York'){
   if(!automation)return;
   const run=automation.today||{},names={running:'正在生成',complete:run.update_available?'数据有更新':'今日已完成',analysis_outdated:'分析待更新',failed:'分析未完成',incomplete:'信息待补齐',waiting_for_sleep:'等待睡眠数据'};
   document.getElementById('automation-badge').textContent=automation.enabled?(names[run.status]||'自动检查中'):'尚未启用';
   const mode=automation.mode==='wake'?`Oura 数据就绪后自动分析 · 每 ${automation.poll_minutes} 分钟检查`:'固定时间运行';
   document.getElementById('automation-status').textContent=automation.enabled?mode+'。'+(run.reason||automation.poll?.message||'等待今天的数据。'):'自动任务尚未启用，历史报告仍可查看。';
-  if(run.analyzed_sleep_end)document.getElementById('automation-status').textContent+=' 本版依据：睡眠结束于 '+new Date(run.analyzed_sleep_end).toLocaleString('zh-CN',{timeZone:state.timezone})+'；后续补传会再核对。';
-  if(run.finished_at)document.getElementById('automation-status').textContent+=' 最近处理：'+new Date(run.finished_at).toLocaleString('zh-CN',{timeZone:state.timezone})+'。';
+  if(run.analyzed_sleep_end)document.getElementById('automation-status').textContent+=' 本版依据：睡眠结束于 '+new Date(run.analyzed_sleep_end).toLocaleString('zh-CN',{timeZone:timezone})+'；后续补传会再核对。';
+  if(run.finished_at)document.getElementById('automation-status').textContent+=' 最近处理：'+new Date(run.finished_at).toLocaleString('zh-CN',{timeZone:timezone})+'。';
   if(run.notification?.accepted)document.getElementById('automation-status').textContent+=' 推送服务已接受状态通知；是否显示仍取决于手机通知设置。';
   if(run.notification?.failed)document.getElementById('automation-status').textContent+=' 通知发送失败，请测试手机通知。';
   document.getElementById('automation-retry').hidden=!automation.enabled||!['failed','incomplete'].includes(run.status);
 };
-(async function preparePush(){
+let pushPreparation=null,pushReady=false,lastPushCheck=0;
+function preparePush(){
+  if(pushPreparation)return pushPreparation;
+  pushPreparation=preparePushOnce().finally(()=>{pushPreparation=null;lastPushCheck=Date.now();});
+  return pushPreparation;
+}
+async function preparePushOnce(){
+  let phase='任务状态';
+  pushReady=false;
+  const recheck=document.getElementById('push-recheck');recheck.disabled=true;
+  pushMessage('正在检查此设备的通知连接…');
   try{
-    const status=await api('/api/status');window.renderAutomation(status.automation,status.push);
+    const status=await api('/api/status');window.renderAutomation(status.automation,status.push,status.timezone);
     const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
     if(ios&&!matchMedia('(display-mode: standalone)').matches&&!navigator.standalone){pushMessage('请先添加到 iPhone 主屏幕，再从图标打开并启用通知。');return;}
     if(!window.isSecureContext||!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){pushMessage('当前浏览器不支持通知；请使用支持 Web Push 的手机浏览器或主屏幕网页。');return;}
     if(!status.push?.available){pushMessage('通知服务尚未就绪，请稍后刷新。');return;}
+    phase='网页通知组件注册';
     pushRegistration=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
-    pushRegistration=await navigator.serviceWorker.ready;
+    phase='网页通知组件就绪';
+    pushRegistration=await pushTimeout(navigator.serviceWorker.ready);
+    phase='服务器通知密钥';
     pushKey=(await api('/api/push/key')).public_key;
+    if(Notification.permission==='denied'){pushButtons(false);pushMessage('此设备的通知权限已关闭，请在 iPhone 设置中允许后点“重新检查通知”。');return;}
+    phase='读取此设备的订阅';
     pushSubscription=await pushRegistration.pushManager.getSubscription();
-    if(pushSubscription){pushDevice=await pushDeviceId(pushSubscription.endpoint);const saved=await api('/api/push/status?device_id='+pushDevice);pushButtons(saved.registered);pushMessage(saved.registered?'此设备已启用；可以发送测试通知。':'此设备需要重新保存通知订阅。');}
+    if(pushSubscription){phase='核对此设备的登记';pushDevice=await pushDeviceId(pushSubscription.endpoint);const saved=await api('/api/push/status?device_id='+pushDevice);pushButtons(saved.registered);pushMessage(saved.registered?'此设备已启用；可以发送测试通知。':'此设备需要重新保存通知订阅。');}
     else{pushButtons(false);pushMessage(Notification.permission==='denied'?'通知被浏览器阻止；请在系统/网站设置中允许后重试。':'启用后，只推送“晨报已更新”，不在锁屏显示健康数据。');}
-  }catch(_){pushMessage('通知初始化未完成，请刷新后重试。');}
-})();
+    pushReady=true;
+  }catch(_){pushButtons(false);pushMessage('通知检查未完成（'+phase+'）。请点“重新检查通知”重试。');}
+  finally{recheck.disabled=false;}
+}
+function pushTimeout(promise){
+  return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('notification setup timeout')),15000);promise.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});
+}
+preparePush();
+document.getElementById('push-recheck').onclick=()=>preparePush();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&(!pushReady||Date.now()-lastPushCheck>60000))preparePush();});
 document.getElementById('push-enable').onclick=async()=>{
   if(!pushRegistration||!pushKey)return;
   try{
