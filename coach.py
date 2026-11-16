@@ -8,6 +8,7 @@ import json
 import math
 import statistics
 import muscles
+import program
 
 DEFAULT_PROFILE = {'goal': 'balanced', 'weekdays': [0, 2, 4], 'minutes': 45,
                    'excluded_muscles': [], 'excluded_exercises': [], 'confirmed': False,
@@ -165,7 +166,7 @@ def tracking(plan,sessions,fetched):
         if t['date']==plan['date']:
             for m in t['movements']:
                 actual[m['name']]=actual.get(m['name'],0)+sum(s['done'] and not s['warmup'] for s in m['sets'])
-    targets=plan.get('exercises',[])
+    targets=[e for e in plan.get('exercises',[]) if e.get('role')!='preparation']
     done=sum(min(actual.get(e['name'],0),e['sets']) for e in targets)
     total=sum(e['sets'] for e in targets)
     status='observed_complete' if total and done>=total else 'partial' if done else 'not_observed'
@@ -295,7 +296,7 @@ def make_plan(d,sessions,fetched,config,p,feedback,checks,history,forecast=None)
     return base
 
 
-def run(d,sessions,fetched,config,p,feedback,checks,state):
+def run(d,sessions,fetched,config,p,feedback,checks,state,source_program=None):
     """Idempotent, date-bounded update; return new state without doing IO."""
     state=json.loads(json.dumps(state or {'plans':{},'calibrations':[],'events':[]}))
     for key,default in (('plans',{}),('calibrations',[]),('events',[])):state.setdefault(key,default)
@@ -325,13 +326,14 @@ def run(d,sessions,fetched,config,p,feedback,checks,state):
         if plan['date']<=d:plan['tracking']=tracking(plan,sessions,fetched)
     forecast=[]
     def project(plan):
+        if plan.get('program_id'):return
         if plan['kind']=='train' and not any(t['date']==plan['date'] for t in sessions):
             forecast.append({'date':plan['date'],'movements':[{'name':e['name'],'sets':[
                 {'done':True,'warmup':False,'rpe':10-e['target_rir'],'weight_kg':e['reference_kg'],'reps':e['reps']}
                 for _ in range(e['sets'])]} for e in plan['exercises']]})
     for offset in range(7):
         target=(asof+dt.timedelta(days=offset)).isoformat()
-        draft=make_plan(target,sessions,fetched,config,p,feedback,checks,state['calibrations'],forecast)
+        draft=program.make_day(source_program,target) or make_plan(target,sessions,fetched,config,p,feedback,checks,state['calibrations'],forecast)
         old=state['plans'].get(target)
         if old and old.get('revision_proposal',{}).get('origin')=='agent_analysis':
             project(old)
@@ -342,7 +344,7 @@ def run(d,sessions,fetched,config,p,feedback,checks,state):
                 old['revision_proposal']=draft
             project(old)
             continue
-        if old and all(old.get(k)==draft.get(k) for k in ('kind','exercises','reasons','profile_confirmed')):
+        if old and all(old.get(k)==draft.get(k) for k in ('kind','exercises','reasons','profile_confirmed','program_id','program_version','template_name')):
             project(old)
             continue
         draft['version']=old.get('version',0)+1 if old else 1
@@ -366,7 +368,11 @@ def plan_markdown(state,d):
         lines.extend('- '+r for r in p['reasons'])
         for e in p['exercises']:
             ref='未填负重' if e['reference_kg'] is None else f'历史负重参考 {e["reference_kg"]:g} kg'
-            lines.append(f'- {e["name"]}：{e["sets"]} 组 × {e["reps"]} 次；预留约 {e["target_rir"]} 次；{ref}。')
+            if e.get('prescribed_sets'):
+                rows=['热身 '+str(s.get('reps') or '次数待填') if s['warmup'] else str(s['seconds'])+' 秒' if s.get('seconds') else (str(s['reps'])+' 次' if s.get('reps') else s.get('distance_note') or '次数/时长待补') for s in e['prescribed_sets']]
+                lines.append('- '+e['name']+'：'+' / '.join(rows)+'；重量仅历史参考，RIR 未填写。')
+            else:
+                lines.append(f'- {e["name"]}：{e["sets"]} 组 × {e["reps"]} 次；预留约 {e["target_rir"]} 次；{ref}。')
             if e.get('adaptation'):lines.append('  - '+e['adaptation'])
         if p.get('tracking'):lines.append('- '+p['tracking']['message'])
         if p.get('revision_proposal'):lines.append('- 存在新的修订草案，原已接受计划仍保留，请在面板核对修订。')

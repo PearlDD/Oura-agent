@@ -27,6 +27,7 @@ import providers
 import cloud
 import push
 import auth
+import program
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('IRON_DATA_DIR') or str(ROOT.parents[1] / 'work' / 'iron-oura-data'))
@@ -478,7 +479,7 @@ def run_coach(d=None):
         sessions, fetched = training_data()
         state = coach.run(d, sessions, fetched, load(DATA/'muscles.json'),
                           load(DATA/'coach-profile.json'), load(DATA/'feedback.json', []),
-                          load(DATA/'checkins.json'), load(DATA/'coach-state.json'))
+                          load(DATA/'checkins.json'), load(DATA/'coach-state.json'), load(DATA/'source-program.json',{}).get('active'))
         save(DATA/'coach-state.json', state)
         return state
 
@@ -489,12 +490,61 @@ def coach_view(d):
     plans = {k:v for k,v in state.get('plans',{}).items()
              if (dt.date.fromisoformat(d)-dt.timedelta(days=7)).isoformat()<=k<=limit
              and v.get('revised_on',v.get('created_on',d))<=d}
+    source_program=load(DATA/'source-program.json',{})
+    active=source_program.get('active')
+    if active:
+        source_program['pending_followup']=[{'date':date,'tracking':p.get('tracking',{}).get('status','unknown')}
+            for date,p in sorted(plans.items()) if date<d and p.get('program_id')==active['id']
+            and p.get('kind')=='train' and p.get('status') not in ('completed','skipped')
+            and p.get('tracking',{}).get('status')!='observed_complete']
     return {'profile':coach.profile(load(DATA/'coach-profile.json')), 'plans':plans,
+            'source_program':source_program,
             'calibration_status':state.get('calibration_status',{}) if state.get('last_run','')<=d else {},
             'events':[e for e in state.get('events',[]) if e['date']<=d][-12:],
             'feedback_dates':sorted({f['date'] for f in load(DATA/'feedback.json',[]) if f['date']<=d}),
             'last_run':state.get('last_run'),
             'feedback_day':[f for f in load(DATA/'feedback.json',[]) if f['date']==d]}
+
+
+def archive_program_plans(from_date, program_id=None):
+    state=load(DATA/'coach-state.json',{})
+    removed={d:p for d,p in state.get('plans',{}).items() if d>=from_date
+             and (program_id is None or p.get('program_id')==program_id)
+             and p.get('status') not in ('completed','skipped')}
+    if removed:
+        save(DATA/'program-plan-archive'/(dt.datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')+'.json'),removed)
+    for d,p in removed.items():
+        # Keep monotonically increasing versions; a stale open card must not match.
+        state['plans'][d]={**p,'kind':'review','exercises':[],'status':'draft'}
+        state['plans'][d].pop('revision_proposal',None)
+    save(DATA/'coach-state.json',state)
+
+
+def program_action(body):
+    with LOCK:
+        value=load(DATA/'source-program.json',{})
+        action=body.get('action')
+        if action=='preview':
+            value['draft']=program.validate(body.get('program'))
+        elif action=='activate':
+            draft=value.get('draft')
+            if body.get('confirmed') is not True or not draft or body.get('id')!=draft['id']:
+                raise AppError('请先核对导入内容并确认。')
+            if value.get('active'):value.setdefault('archive',[]).append(value['active'])
+            value['active']={**draft,'confirmed':True,'source_confirmed_at':dt.datetime.now(TZ).isoformat()}
+            value.pop('draft',None)
+            archive_program_plans(draft['anchor_date'])
+        elif action=='shift':
+            if body.get('confirmed') is not True:raise AppError('请先确认该日训练未完成；无日志不代表没练。')
+            date=day(body.get('date'))
+            if date>today().isoformat():raise AppError('不能将未来训练标记为未完成。')
+            value['active']=program.shift(value.get('active'),date,body.get('version'))
+            archive_program_plans(date,value['active']['id'])
+        else:raise AppError('计划导入操作无效。')
+        value['archive']=value.get('archive',[])[-10:]
+        save(DATA/'source-program.json',value)
+        if action!='preview':run_coach()
+    return {'ok':True}
 
 
 def coach_action(body):
@@ -584,7 +634,13 @@ def report(d):
             notes.append('部分训记记录被接口截断，组数统计可能不完整。')
             break
     check = load(DATA / 'checkins.json').get(d, {})
-    context = day_context(d, sessions, fetched, check)
+    source_day=program.make_day(load(DATA/'source-program.json',{}).get('active'),d)
+    context_check=check
+    if source_day and check.get('plan','undecided')=='undecided':
+        context_check={**check,'plan':source_day['kind']}
+    context = day_context(d, sessions, fetched, context_check)
+    if source_day and context_check is not check:
+        context['plan_source']='confirmed_program_import'
     notes.insert(0, context['reason'])
     gap = (date - dt.date.fromisoformat(last_date)).days if last_date else None
     if gap is not None and gap > 0:
@@ -778,7 +834,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(auth.sessions(sys.modules[__name__], self.headers))
             elif p == '/':
                 self.reply((ROOT / 'static/index.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
-            elif p in ('/api.js', '/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
+            elif p in ('/program.js', '/api.js', '/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
                 mime = ('text/javascript' if p.endswith('.js') else 'text/css' if p.endswith('.css') else
                         'image/png' if p.endswith('.png') else 'application/manifest+json')
                 self.reply((ROOT / 'static' / p[1:]).read_bytes(), mime=mime)
@@ -893,6 +949,8 @@ class Handler(BaseHTTPRequestHandler):
                     JOB = {'running': True, 'message': '开始同步…', 'errors': []}
                     threading.Thread(target=sync, args=(count, True), daemon=True).start()
                 self.reply({'ok': True})
+            elif p == '/api/program':
+                self.reply(program_action(body))
             elif p == '/api/health':
                 save_health(body)
                 self.reply({'ok':True})

@@ -2,6 +2,11 @@ const $ = id => document.getElementById(id);
 let state, loadedDate, wasRunning = false, polling, dirtyCheckin = false, muscleData, coachData, feedbackDirty=false;
 function status(text, error=false) { $('status').textContent=text; $('status').classList.toggle('error',error); }
 function text(tag, value, className) {const el=document.createElement(tag);el.textContent=value;if(className)el.className=className;return el;}
+function formatPrescribedMove(move){
+  const rows=move.prescribed_sets.map((s,i)=>`${i+1}: ${s.warmup?'热身 ':''}${s.seconds?s.seconds+'秒':s.reps?s.reps+'次':s.distance_note||'次数/时长待补'}${s.reference_load?'（历史 '+s.reference_load+'）':''}`);
+  return move.name+' · '+({preparation:'准备/活动度',strength:'力量动作',unclassified:'分类待核对'}[move.role]||'')+'；'+rows.join(' / ')+'；RIR 未填';
+}
+
 function fmt(v, digits=0) {return v == null ? '—' : Number(v).toFixed(digits);}
 function selected() {return $('report-date').value || state.today;}
 async function refreshStatus() {
@@ -155,14 +160,16 @@ function renderHealth(h,d){
 $('health-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/health',{date:selected(),strain:$('health-strain').value,cycle:$('health-cycle').value,symptoms:$('health-symptoms').value});await refreshReport();status('身体背景已保存；需要重新生成 AI 分析。');}catch(e){status(e.message,true);}};
 $('decision-apply').onclick=async()=>{try{await api('/api/decision/apply',{date:selected()});await refreshReport();status('已提交修订提案，请在计划卡片核对后决定是否接受。');}catch(e){status(e.message,true);}};
 function renderCoach(c,d){
+  if(typeof window.renderSourceProgram==='function')window.renderSourceProgram(c.source_program||{},d);
   $('coach-profile-state').textContent=c.profile.confirmed?(c.profile.schedule_provisional||c.profile.minutes_provisional?'安排待确认':'偏好已确认'):'偏好待确认';
   const labels={draft:'草案',accepted:'已接受',completed:'已手动标记完成',skipped:'已跳过'};
   const box=$('coach-plans');box.replaceChildren();
   const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
   for(const p of upcoming){
-    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · Agent 起草 · 版本 ${p.version}`));
-    const drill=text('details','','plan-drill');drill.append(text('summary','查看安排 ↗'));card.append(text('p',p.kind==='train'?`${p.exercises.length} 个动作 · ${p.exercises.reduce((n,e)=>n+e.sets,0)} 组`:p.kind==='rest'?'恢复 / 自由安排':'先核对限制','plan-preview'));
-    const list=text('ul','');for(const e of p.exercises){list.append(text('li',`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}drill.append(list);for(const e of p.exercises)if(e.adaptation)drill.append(text('small',e.name+'：'+e.adaptation));
+    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · ${p.program_id?'现行计划副本':'Agent 起草'} · 版本 ${p.version}`));
+    const drill=text('details','','plan-drill');drill.append(text('summary','查看安排 ↗'));card.append(text('p',p.kind==='train'?`${p.exercises.length} 个动作${p.program_id?'（含准备）':''} · ${p.exercises.reduce((n,e)=>n+e.sets,0)} 组${p.program_id?'安排':''}`:p.kind==='rest'?'恢复 / 自由安排':'先核对限制','plan-preview'));
+    if(p.template_name)card.append(text('p',p.template_name,'plan-template'));
+    const list=text('ul','');for(const e of p.exercises){list.append(text('li',e.prescribed_sets?formatPrescribedMove(e):`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}drill.append(list);for(const e of p.exercises)if(e.adaptation)drill.append(text('small',e.name+'：'+e.adaptation));
     const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));drill.append(why);
     if(p.tracking)drill.append(text('p',p.tracking.message));
     if(p.revision_proposal){const rev=text('div','','plan-revision');rev.append(text('strong','有新的修订草案，当前计划保留'));for(const e of p.revision_proposal.exercises)rev.append(text('p',`${e.name}：${e.sets} × ${e.reps}，预留 ${e.target_rir} 次`));for(const r of p.revision_proposal.reasons)rev.append(text('small',r));drill.append(rev);}

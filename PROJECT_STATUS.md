@@ -35,11 +35,17 @@ or an older checkout. Conversation history is not a substitute for repository st
 - `3fe7c06`: rolling activity no longer falsely expires analysis.
 - `9aec4b2`: revisions for distinct stable sleep snapshots.
 
-## Important remaining limitation
+## Imported-program support and remaining limitation
 
-The website's training plans are Agent drafts based on history and preferences.
-They are not a mirror of the user's active SynFit personal plan or auto-postponed
-calendar. Training logs, official plans and personal templates are different sources.
+The website supports user-confirmed private program import: exact set rows, cyclic
+training/rest dates, historical load references and explicit whole-cycle shifts.
+A confirmed unfinished day shifts subsequent training AND rest; missing records
+are not enough to trigger shifts. Source activation archives unfinished web plans;
+completed/skipped records remain. Unknown RIR/dose remains unknown; qualitative distances can be retained without inventing metres or seconds. Overdue unverified training is surfaced for follow-up, not automatically marked missed. Imported plans
+currently permit textual AI changes or separately confirmed rest proposals; direct
+AI exercise-row replacement is blocked to preserve variable sets and unknown dose.
+Without an import, plans remain Agent drafts. Imported programs are not a live
+mirror of SynFit or its auto-postponed calendar. Training logs, official plans and personal templates are different sources.
 The documented personal-template interface is restricted to the dedicated Agent
 folder; do not claim access to arbitrary user folders. Align the real source plan
 before claiming a recommendation evaluates that existing plan. An absent API result
@@ -47,7 +53,7 @@ is not proof the user has no plan.
 
 ## Verification and continuation
 
-The cloud image passed 99 Python tests at this checkpoint. Browser regressions are
+The cloud image passed 106 Python tests after the imported-program change. Browser regressions are
 covered by synthetic tests that do not use credentials, health data or network:
 
 ```sh
@@ -55,6 +61,7 @@ python3 -m unittest -q
 node test_api.js
 node test_decision_ui.js
 node test_push_ui.js
+node test_program_ui.js
 ```
 
 Install requirements-cloud.txt in an isolated environment to run dependency-specific
