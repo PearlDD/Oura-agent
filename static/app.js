@@ -163,27 +163,7 @@ function renderCoach(c,d){
   if(typeof window.renderSourceProgram==='function')window.renderSourceProgram(c.source_program||{},d);
   $('coach-profile-state').textContent=c.profile.confirmed?(c.profile.schedule_provisional||c.profile.minutes_provisional?'安排待确认':'偏好已确认'):'偏好待确认';
   const labels={draft:'草案',accepted:'已接受',completed:'已手动标记完成',skipped:'已跳过'};
-  const box=$('coach-plans');box.replaceChildren();
-  const upcoming=Object.values(c.plans).filter(p=>p.date>=d).sort((a,b)=>a.date.localeCompare(b.date));
-  for(const p of upcoming){
-    const card=text('article','','plan-card');card.append(text('h3',p.date+' · '+({train:'训练',rest:'休息',review:'待核对'}[p.kind])),text('small',`${labels[p.status]} · ${p.program_id?'现行计划副本':'Agent 起草'} · 版本 ${p.version}`));
-    const drill=text('details','','plan-drill');drill.append(text('summary','查看安排 ↗'));card.append(text('p',p.kind==='train'?`${p.exercises.length} 个动作${p.program_id?'（含准备）':''} · ${p.exercises.reduce((n,e)=>n+e.sets,0)} 组${p.program_id?'安排':''}`:p.kind==='rest'?'恢复 / 自由安排':'先核对限制','plan-preview'));
-    if(p.template_name)card.append(text('p',p.template_name,'plan-template'));
-    const list=text('ul','');for(const e of p.exercises){list.append(text('li',e.prescribed_sets?formatPrescribedMove(e):`${e.name}：${e.sets} × ${e.reps}，预留约 ${e.target_rir} 次；${e.reference_kg==null?'负重未填':'历史参考 '+fmt(e.reference_kg,1)+' kg'}`));}drill.append(list);for(const e of p.exercises)if(e.adaptation)drill.append(text('small',e.name+'：'+e.adaptation));
-    const why=text('details','');why.append(text('summary','依据与调整说明'));for(const r of p.reasons)why.append(text('p',r));drill.append(why);
-    if(p.tracking)drill.append(text('p',p.tracking.message));
-    if(p.revision_proposal){const rev=text('div','','plan-revision');rev.append(text('strong','有新的修订草案，当前计划保留'));for(const e of p.revision_proposal.exercises)rev.append(text('p',`${e.name}：${e.sets} × ${e.reps}，预留 ${e.target_rir} 次`));for(const r of p.revision_proposal.reasons)rev.append(text('small',r));drill.append(rev);}
-    const actions=text('div','','plan-actions');
-    for(const [action,label] of [['accepted','接受计划'],['completed','标记已完成'],['skipped','跳过'],['accept_revision','接受修订']]){
-      if(action==='accepted'&&(p.status!=='draft'||p.kind==='review'))continue;
-      if(action==='completed'&&(p.date>state.today||p.kind!=='train'||p.status==='completed'))continue;
-      if(action==='accept_revision'&&(!p.revision_proposal||p.revision_proposal.kind==='review'))continue;
-      if(action==='skipped'&&p.status==='skipped')continue;
-      const b=text('button',label,'ghost');b.type='button';b.onclick=async()=>{try{await api('/api/coach',{action:'plan_status',date:p.date,version:p.version,status:action});await refreshReport();status('计划状态已保存。');}catch(e){status(e.message,true);}};actions.append(b);
-    }
-    drill.append(actions);card.append(drill);box.append(card);
-  }
-  if(!upcoming.length)box.append(text('div','点击「更新计划与跟进」生成未来 7 天草案，再确认训练偏好。','empty'));
+  renderPlanWorkspace(c,d);
   $('coach-calibration').replaceChildren();
   const calibration=Object.values(c.calibration_status).filter(m=>m.samples);
   for(const m of calibration)$('coach-calibration').append(text('p',`${m.name}：${m.samples} 天反馈 / ${m.episodes} 次相关训练 / RPE 覆盖 ${fmt(m.rpe_coverage*100)}%。${m.reason}${m.baseline_mae==null?'':` 留出 MAE ${m.baseline_mae} → ${m.candidate_mae}。`}${m.status==='accepted'?' 参数将于 '+m.effective_from+' 生效。':''}`,'calibration-row'));
@@ -325,12 +305,19 @@ $('ai-generate').onclick=async()=>{
 let chatState=null,chatDate=null,chatLoading=false,chatSending=false;
 const chatDrafts={};
 function chatStatus(message,error=false){$('chat-status').textContent=message;$('chat-status').classList.toggle('error',error);}
+function chatText(value){
+  const p=text('p','');
+  for(const [i,part] of String(value).split(/\*\*(.*?)\*\*/gs).entries()){
+    p.append(text(i%2?'strong':'span',part));
+  }
+  return p;
+}
 function renderChat(c){
   chatState=c;$('chat-context-date').textContent='正在讨论 '+c.date+' 的报告';
   $('chat-model').textContent=c.ready?`${c.provider_label} · ${c.model} · 最近6轮对话`:c.configuration_error||'请先在连接与设置配置模型和 API Key';
   const box=$('chat-messages');box.replaceChildren();
   if(!c.messages.length){const empty=text('div','','chat-welcome');empty.append(text('strong','看不懂哪一处？直接问。'),text('p','我会结合这份报告和当前计划解释。你的问题可以继续追问；这里的对话与 Codex 聊天分别保存。'));box.append(empty);}
-  for(const m of c.messages){const bubble=text('article','',m.role==='user'?'chat-bubble chat-user':'chat-bubble chat-agent');bubble.append(text('small',m.role==='user'?'你':'训练 Agent'),text('p',m.text));if(m.role==='assistant'&&m.context_changed)bubble.append(text('small','回答后数据已变化，以新提问时的背景为准。','chat-old'));box.append(bubble);}
+  for(const m of c.messages){const bubble=text('article','',m.role==='user'?'chat-bubble chat-user':'chat-bubble chat-agent');bubble.append(text('small',m.role==='user'?'你':'训练 Agent'),chatText(m.text));if(m.role==='assistant'&&m.context_changed)bubble.append(text('small','回答后数据已变化，以新提问时的背景为准。','chat-old'));box.append(bubble);}
   $('chat-new').disabled=chatSending||c.busy;
   $('chat-send').disabled=chatSending||c.busy||!c.ready;
   const examples=['这些组数是减载还是基础安排？','今天为什么建议休息？','预留 3 次是什么意思？'];

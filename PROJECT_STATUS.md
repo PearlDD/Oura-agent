@@ -7,6 +7,14 @@ or an older checkout. Conversation history is not a substitute for repository st
 
 ## Current implementation
 
+- Plan UI uses a selectable week strip and a full-width day table (`static/plans.js`).
+  Imported original prescriptions are returned separately as `coach_agent.plan_baselines`.
+  The table distinguishes original/current arrangements and pending revisions, highlights
+  changed rows, and keeps preparation and historical weights collapsed. Unknown RIR and
+  qualitative distances stay unknown; no chat prose is converted into a saved revision.
+  A proposal needs the existing explicit acceptance action. Chat bold text is rendered
+  with safe text nodes. UI-only changes require no new model call.
+
 - Personal VPS deployment uses Docker Compose and Caddy HTTPS. Localhost instructions
   are for local development only. Production data/settings live in private volumes.
 - Cloud login has revocable remembered-device sessions. Login state survives app
@@ -62,6 +70,7 @@ node test_api.js
 node test_decision_ui.js
 node test_push_ui.js
 node test_program_ui.js
+node test_plans_ui.js
 ```
 
 Install requirements-cloud.txt in an isolated environment to run dependency-specific

@@ -499,6 +499,7 @@ def coach_view(d):
             and p.get('tracking',{}).get('status')!='observed_complete']
     return {'profile':coach.profile(load(DATA/'coach-profile.json')), 'plans':plans,
             'source_program':source_program,
+            'plan_baselines':{date:program.make_day(active,date) for date in plans} if active else {},
             'calibration_status':state.get('calibration_status',{}) if state.get('last_run','')<=d else {},
             'events':[e for e in state.get('events',[]) if e['date']<=d][-12:],
             'feedback_dates':sorted({f['date'] for f in load(DATA/'feedback.json',[]) if f['date']<=d}),
@@ -834,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(auth.sessions(sys.modules[__name__], self.headers))
             elif p == '/':
                 self.reply((ROOT / 'static/index.html').read_text().replace('__NONCE__', NONCE), mime='text/html; charset=utf-8')
-            elif p in ('/program.js', '/api.js', '/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
+            elif p in ('/plans.js', '/program.js', '/api.js', '/app.js', '/style.css', '/push.js', '/auth.js', '/login.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'):
                 mime = ('text/javascript' if p.endswith('.js') else 'text/css' if p.endswith('.css') else
                         'image/png' if p.endswith('.png') else 'application/manifest+json')
                 self.reply((ROOT / 'static' / p[1:]).read_bytes(), mime=mime)
