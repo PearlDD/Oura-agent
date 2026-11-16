@@ -1,5 +1,7 @@
 # IRON / OURA · Personal Training Agent
 
+继续开发／新 chat 请先读 [项目当前状态与交接](PROJECT_STATUS.md)，并核对 `origin/main`，避免使用旧工作副本。
+
 支持本机与私人 VPS 部署的单用户训练与恢复工具，结合训记训练记录和 Oura 指标，提供中文日报、实验性肌群负荷观察、待确认训练计划与实际 AI 分析。Python 3.10+，核心使用标准库；云端登录与手机通知使用固定版本的 bcrypt / Web Push 依赖。
 
 ## 云端访问与连接
