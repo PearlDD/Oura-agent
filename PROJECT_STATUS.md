@@ -7,6 +7,11 @@ or an older checkout. Conversation history is not a substitute for repository st
 
 ## Current implementation
 
+- AI generation transport waits up to 180 seconds; ordinary data requests retain
+  60 seconds. Timeout/connection failures save only sanitized categories and elapsed
+  time, never raw exceptions or secrets. Ambiguous failed generations are not blindly
+  rebilled: the existing explicit scheduler retry remains the recovery action.
+
 - Plan UI uses a selectable week strip and a full-width day table (`static/plans.js`).
   Imported original prescriptions are returned separately as `coach_agent.plan_baselines`.
   The table distinguishes original/current arrangements and pending revisions, highlights

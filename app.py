@@ -91,6 +91,10 @@ def update_settings(values):
 def request_json(url, payload=None, token=None, form=False, extra_headers=None):
     provider='gemini' if url.startswith('https://generativelanguage.googleapis.com/') else 'openai'
     is_ai=url.startswith(('https://api.openai.com/','https://generativelanguage.googleapis.com/'))
+    # Generation may need longer than data synchronization. Never retry an
+    # ambiguous timeout here: the provider may already have billed the request.
+    timeout = 180 if is_ai and payload is not None else 60
+    started = time.monotonic()
     ai_status=DATA/('ai-status-gemini.json' if provider=='gemini' else 'ai-status.json')
     headers = {'User-Agent': 'IronOuraMVP/0.1', 'Accept-Encoding': 'gzip'}
     if token:
@@ -101,7 +105,7 @@ def request_json(url, payload=None, token=None, form=False, extra_headers=None):
         headers['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
         body = (urllib.parse.urlencode(payload) if form else json.dumps(payload)).encode()
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers), timeout=60) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers), timeout=timeout) as r:
             raw = r.read(15_000_001)
         if len(raw) > 15_000_000:
             raise AppError('接口响应过大，请缩小同步范围。')
@@ -125,7 +129,16 @@ def request_json(url, payload=None, token=None, form=False, extra_headers=None):
         if is_ai:
             save(ai_status,{'ok':False,'checked_at':time.time(),'message':labels.get(e.code,'模型请求失败，请检查设置或稍后重试')})
         raise AppError(f'接口 HTTP {e.code}：{labels.get(e.code, "请求失败，请稍后重试")}。') from None
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, TimeoutError) as error:
+        timed_out = isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError)
+        if is_ai:
+            message = ('AI 生成等待超时，未收到完整结果；请稍后手动重试。' if timed_out
+                       else 'AI 服务连接失败，未收到完整结果；请稍后手动重试。')
+            save(ai_status, {'ok': False, 'checked_at': time.time(), 'message': message,
+                             'error_code': 'timeout' if timed_out else 'connection_error',
+                             'elapsed_seconds': round(time.monotonic() - started, 1),
+                             'timeout_seconds': timeout})
+            raise AppError(message) from None
         raise AppError('无法连接服务，请检查网络后重试。') from None
     except (ValueError, gzip.BadGzipFile):
         raise AppError('接口未返回有效 JSON 数据。') from None

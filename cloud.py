@@ -162,6 +162,10 @@ def failure_reason(error, phase):
         return '分析期间数据或计划发生变化，结果未保存；请重新分析。'
     if '无法连接服务' in message:
         return 'AI 请求连接失败或超时，结果未保存；请稍后重试。'
+    if 'AI 生成等待超时' in message:
+        return 'AI 生成等待超时，未收到完整结果；今日分析未更新，可手动重试。'
+    if 'AI 服务连接失败' in message:
+        return 'AI 服务连接失败，今日分析未更新；可手动重试。'
     return 'AI 分析或保存阶段失败；未保存有效建议，可在面板重试。'
 
 
