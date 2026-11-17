@@ -7,6 +7,12 @@ or an older checkout. Conversation history is not a substitute for repository st
 
 ## Current implementation
 
+- The homepage load chart shows all catalogued muscle groups, including chest,
+  front delts and serratus, independent of planning priorities. Support/control
+  involvement is shown separately and does not inflate strength bars. Zero display
+  rows for inactive groups are presentation-only; model rows, fingerprints and
+  allocations remain unchanged. Coverage caveats still apply to all bars.
+
 - Missing optional Symptom Radar/RPE/cycle fields do not themselves require a
   clarify verdict or repetitive user entry. Unknown Strain is omitted from key
   clues; an explicit dated user report of no signs is shown with its source.

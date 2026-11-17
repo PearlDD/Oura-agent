@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+const source=fs.readFileSync(__dirname+'/static/app.js','utf8'),nodes={};
+function el(tag,value='',cls=''){return{tag,textContent:value,className:cls,style:{},children:[],append(...v){this.children.push(...v)},replaceChildren(...v){this.children=v},setAttribute(){}}}
+const scope={text:el,$:id=>nodes[id]||(nodes[id]=el('div')),fmt:x=>String(x),coachData:{profile:{priority_muscles:['glutes']}}};
+vm.createContext(scope);vm.runInContext(source.slice(source.indexOf('function renderLoadChart('),source.indexOf('function renderMuscles(')),scope);
+const keys=['chest','front_delts','triceps','glutes'];
+const model={coverage:[7,7],muscles:keys.map((key,i)=>({key,name:key,direct_sets:i,indirect_sets:.5,week_sets:i+.5,previous_sets:1,usual_week:2}))};
+scope.renderLoadChart(model);assert.equal(nodes['load-chart'].children.length,4);
+assert.deepEqual(nodes['load-chart'].children.map(n=>n.children[0].children[0].textContent),keys);
+assert.equal(model.muscles[0].week_sets,.5);
+console.log('All modeled muscles remain visible regardless of training priorities');
+model.groups={chest:'Chest',front_delts:'Front delts',triceps:'Triceps',glutes:'Glutes',serratus:'Serratus',rotator_cuff:'Rotator cuff'};
+model.exercises=[{kind:'support',weights:{serratus:1},sets_7d:3}];
+scope.renderLoadChart(model);
+assert.equal(nodes['load-chart'].children.length,6);
+const serratus=nodes['load-chart'].children[4];
+assert.equal(serratus.children[0].children[0].textContent,'Serratus');
+assert.match(serratus.children[2].textContent,/3/);
+assert.equal(serratus.children[1].children[0].children[0].style.width,'0%');
+assert.equal(model.muscles.length,4);
+console.log('Support-only muscles visible without changing strength totals or model rows');

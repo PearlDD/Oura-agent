@@ -201,8 +201,10 @@ $('coach-profile-form').onsubmit=async e=>{e.preventDefault();try{await api('/ap
 function updateRanges(){for(const key of ['energy','soreness'])$(key+'-value').textContent=$(key).value+' / 5';}
 function option(value,label){const o=text('option',label);o.value=value;return o;}
 function renderLoadChart(m){
-  const priority=new Set(coachData?.profile?.priority_muscles||['glutes','lats','upper_back','side_delts']);
-  const rows=m.muscles.filter(v=>priority.has(v.key)||['rear_delts','hamstrings'].includes(v.key));
+  // Training preferences affect planning, never whether recorded load is visible.
+  const rows=m.groups?Object.entries(m.groups).map(([key,name])=>m.muscles.find(r=>r.key===key)||{
+    key,name,direct_sets:0,indirect_sets:0,week_sets:0,previous_sets:0,usual_week:null
+  }):m.muscles;
   const max=Math.max(1,...rows.flatMap(v=>[v.week_sets,v.previous_sets,v.usual_week||0]));
   const cap=Math.max(5,Math.ceil(max/5)*5),box=$('load-chart');box.replaceChildren();
   const cover=m.coverage||[];
@@ -210,6 +212,7 @@ function renderLoadChart(m){
   for(const r of rows){
     const row=text('div','','load-row'),head=text('div','','load-label');
     head.append(text('strong',r.name),text('span',`${fmt(r.week_sets,1)} 组${cover[0]<7?' · 未齐':''}`));row.append(head);
+    const support=(m.exercises||[]).filter(e=>e.kind==='support'&&e.weights?.[r.key]>0).reduce((n,e)=>n+e.sets_7d,0);
     const plot=text('div','','load-plot');plot.title=`近7天 ${r.week_sets}（主练 ${r.direct_sets} / 间接 ${r.indirect_sets}）；前7天 ${r.previous_sets}；历史 ${r.usual_week??'不足'} 组当量`;
     const now=text('div','','load-track load-now');now.setAttribute('role','img');
     now.setAttribute('aria-label',`${r.name}近七天主练 ${r.direct_sets} 组，间接 ${r.indirect_sets} 当量，前七天 ${r.previous_sets}，历史周量 ${r.usual_week??'不足'}`);
@@ -218,7 +221,9 @@ function renderLoadChart(m){
     const previous=text('div','','load-track load-before'),fill=text('i','','bar-previous');fill.style.width=(Math.max(0,r.previous_sets)/cap*100)+'%';previous.append(fill);
     plot.append(now,previous);
     if(r.usual_week!=null){const marker=text('i','','bar-marker');marker.style.left=(Math.max(0,r.usual_week)/cap*100)+'%';marker.title=`历史周量 ${r.usual_week} 当量`;plot.append(marker);}
-    row.append(plot);box.append(row);
+    row.append(plot);
+    if(support)row.append(text('small',`另有辅助／控制 ${support} 组涉及此肌群 · 不计入力量条`,'load-support'));
+    box.append(row);
   }
   if(!rows.length)box.append(text('p','暂无可归类的肌群数据，先同步或核对动作归属。','muted'));
   $('load-summary').textContent=cover[0]<7||cover[1]<7?'读取尚未齐全：条形只表示已同步的记录，缺失日期不能当作零负荷。':rows.every(r=>r.week_sets===0)?'近 7 天未记录这些肌群的正式组；浅色条保留前 7 天的训练分布。低负荷不等于已经恢复。':'实色＋浅绿为本周主练与间接参与；灰条对照前周，虚线标记个人历史。';
