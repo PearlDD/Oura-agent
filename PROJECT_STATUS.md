@@ -7,6 +7,12 @@ or an older checkout. Conversation history is not a substitute for repository st
 
 ## Current implementation
 
+- Missing optional Symptom Radar/RPE/cycle fields do not themselves require a
+  clarify verdict or repetitive user entry. Unknown Strain is omitted from key
+  clues; an explicit dated user report of no signs is shown with its source.
+  Pending training matching does not automatically shift the calendar or block
+  a planned rest day; until the user confirms a shift, evaluate the saved schedule.
+
 - AI generation transport waits up to 180 seconds; ordinary data requests retain
   60 seconds. Timeout/connection failures save only sanitized categories and elapsed
   time, never raw exceptions or secrets. Ambiguous failed generations are not blindly

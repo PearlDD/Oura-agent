@@ -147,8 +147,8 @@ function renderClues(r){
     rows.push([label,v==null?'待同步':`${fmt(v)} ${unit}`,b==null?'基线不足':`平时 ${fmt(b)} ${unit}`]);
   }
   const h=r.health_observations.history.find(v=>v.date===r.date);
-  const level={major:'Major',minor:'Minor',none:'No signs',unknown:'未填写'}[h?.strain]||'未填写';
-  rows.push(['Strain',level,h?'用户报告':'待核对']);
+  const level={major:'Major signs',minor:'Minor signs',none:'无提示'}[h?.strain];
+  if(level)rows.push(['Oura Strain',level,'你在 Oura 中看到的状态']);
   $('decision-clues').replaceChildren(...rows.map(([label,value,sub])=>{const row=text('div','','decision-clue');row.append(text('span',label),text('strong',value),text('small',sub));return row;}));
 }
 function renderHealth(h,d){

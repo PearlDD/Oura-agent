@@ -16,3 +16,13 @@ console.log('Decision colors passed: red only for replacing a planned training d
 
 assert.equal(scope.decisionSignal({analysis:{verdict:'rest'}},{kind:'train'},'rest').tone,'neutral');
 assert.equal(scope.decisionSignal({analysis:{verdict:'rest'}},{kind:'rest'},'train').tone,'red');
+
+const clues={};
+function element(tag,value=''){return {tag,textContent:value,children:[],append(...x){this.children.push(...x)},replaceChildren(...x){this.children=x}}}
+scope.$=id=>clues[id]||(clues[id]=element('div'));scope.text=element;scope.fmt=x=>String(x);
+vm.runInContext(source.slice(source.indexOf('function renderClues('),source.indexOf('function renderHealth(')),scope);
+const report={date:'2030-01-01',recovery:{hrv:50,rhr:55},baseline:{hrv:{value:52},rhr:{value:55}},health_observations:{history:[]}};
+scope.renderClues(report);assert.equal(clues['decision-clues'].children.length,2);
+report.health_observations.history=[{date:report.date,strain:'none'}];
+scope.renderClues(report);assert.equal(clues['decision-clues'].children[2].children[1].textContent,'无提示');
+console.log('Missing optional strain is omitted; explicit no-sign report stays visible');
