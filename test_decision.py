@@ -61,6 +61,21 @@ class SnapshotFingerprintTests(unittest.TestCase):
         self.assertEqual(decision.fingerprint(old),decision.fingerprint(new))
         self.assertEqual(old['recovery']['activity']['steps'],100)
 
+    def test_daytime_summary_scores_and_contributors_are_snapshot_only(self):
+        old=self.context();new=copy.deepcopy(old)
+        new['recovery'].update(readiness=99,sleep_score=99,sleep_contributors={'total_sleep':99},
+                               readiness_contributors={'recovery_index':99},temperature_deviation=.2)
+        new['recovery_history'][1].update(readiness=99,sleep_score=99)
+        self.assertEqual(decision.fingerprint(old),decision.fingerprint(new))
+
+    def test_previous_policy_migrates_only_with_verified_snapshot_and_same_night(self):
+        old=self.context();stored=decision.previous_fingerprint(old)
+        new=copy.deepcopy(old);new['recovery']['readiness']=99
+        self.assertEqual(decision.compatible_hash(stored,new,{'data_hash':stored,'context':old}),decision.fingerprint(new))
+        self.assertEqual(decision.compatible_hash(stored,new,{}),stored)
+        new['recovery']['sleep_hours']=9
+        self.assertEqual(decision.compatible_hash(stored,new,{'data_hash':stored,'context':old}),stored)
+
     def test_sleep_recovery_training_feedback_plan_and_completed_activity_still_invalidate(self):
         old=self.context()
         for change in (lambda x:x['recovery'].update(sleep_hours=9),lambda x:x['recovery'].update(hrv=45),lambda x:x['plans'].update(version=2),lambda x:x['training_history'].append({'sets':3}),lambda x:x['checkin'].update(energy=2),lambda x:x['health_observations'].update(symptoms='changed'),lambda x:x['recovery_history'][0]['activity'].update(steps=9000)):

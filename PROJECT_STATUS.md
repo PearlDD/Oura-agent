@@ -1,18 +1,23 @@
 # Current project status
 
-Technical handoff checkpoint: 2026-11-16 (America/New_York).
+Technical handoff checkpoint: 2026-11-18 (America/New_York).
 Read this file and README.md when continuing in a new chat. Fetch origin/main and
 compare the checkout before editing; a new chat may start from a different folder
 or an older checkout. Conversation history is not a substitute for repository state.
 
 ## Current implementation
 
-- Automatic refresh now checks the same complete decision fingerprint used for
-  staleness, not just the short sleep snapshot. Stable new recovery contributors,
-  training/plan/feedback contexts can trigger a revision. `wake-poll.json` persists
-  full-context stability timestamps; `cloud-runs.json` stores attempted context hashes
-  to prevent rebilling failed or reverted versions. Ordinary activity counters remain
-  excluded. Pre-upgrade failures without a context audit still need explicit retry.
+- User preference: automatic refresh follows the ended main NIGHT sleep only.
+  Main-sleep duration/times/HRV/heart rate/breathing/efficiency corrections can trigger
+  a stable new revision. Steps, naps and changes to today's daily sleep/readiness
+  scores, contributors or daily temperature aggregates do not invalidate the morning
+  snapshot or trigger generation. Those aggregates remain available as input snapshots.
+  Actual training/plan/feedback changes still require checking advice but do not trigger
+  automatic daytime generation; manual analysis remains available. Fingerprint v3
+  migrates a previous-policy decision only with a verified original context; a fresh
+  verified report registers sleep identity v2 without another model call. Failed or
+  reverted night versions remain deduplicated. Do not restore the prior broad
+  full-context automatic refresh: this narrower policy is explicitly user requested.
 
 - The homepage load chart shows all catalogued muscle groups, including chest,
   front delts and serratus, independent of planning priorities. Support/control

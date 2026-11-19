@@ -230,7 +230,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(cloud.view(app)['today']['status'],'analysis_outdated')
         self.assertEqual(app.load(app.DATA/'cloud-runs.json')[today]['status'],'complete')
 
-class FullContextRefreshTests(unittest.TestCase):
+class NightOnlyRefreshTests(unittest.TestCase):
     setUp = WakeTests.setUp
     tearDown = WakeTests.tearDown
     def setup_report(self, change):
@@ -243,33 +243,25 @@ class FullContextRefreshTests(unittest.TestCase):
             'analyzed_context':old_hash,'analysis_versions':[old_hash]}})
         return report,old_hash
 
-    def test_non_sleep_identity_recovery_change_is_refreshed_after_stability(self):
-        report,old_hash=self.setup_report({'readiness_contributors':{'recovery_index':40}})
-        original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
-        self.assertEqual(cloud.sleep_candidate(report,self.now),original)
+    def test_daytime_summary_change_does_not_trigger_analysis(self):
+        report,old_hash=self.setup_report({'readiness_contributors':{'recovery_index':40},'readiness':90,'sleep_score':95})
+        self.assertEqual(old_hash,app.decision.fingerprint(app.analysis_context('2026-11-10',report)))
         with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
              patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
-             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily',return_value=True) as run:
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily') as run:
             self.assertFalse(cloud.run_due(app,self.now))
-            self.assertTrue(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['update_available'])
-            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
-            run.assert_called_once()
-            current=app.decision.fingerprint(app.analysis_context('2026-11-10',report))
-            state=app.load(app.DATA/'cloud-runs.json')
-            state['2026-11-10'].update(status='failed',analyzed_context=current,analysis_versions=[old_hash,current])
-            app.save(app.DATA/'cloud-runs.json',state)
-            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
-            self.assertEqual(run.call_count,1)
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            run.assert_not_called()
 
-    def test_plan_change_uses_same_full_context_as_stale_check(self):
+    def test_plan_change_requires_manual_analysis_not_a_daytime_run(self):
         report,_=self.setup_report({})
         report['plans']={'2026-11-10':{'kind':'rest','version':2}}
         with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
              patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
              patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily',return_value=True) as run:
             self.assertFalse(cloud.run_due(app,self.now))
-            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
-            run.assert_called_once()
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            run.assert_not_called()
 
     def test_activity_counters_do_not_trigger_another_paid_analysis(self):
         report,old_hash=self.setup_report({'activity':{'steps':99}})
@@ -288,6 +280,7 @@ class FullContextRefreshTests(unittest.TestCase):
         report['decision']['stale']=False
         state=app.load(app.DATA/'cloud-runs.json')
         state['2026-11-10'].pop('analyzed_context');state['2026-11-10'].pop('analysis_versions')
+        state['2026-11-10']['analyzed_sleep']='legacy-scored-sleep-identity'
         app.save(app.DATA/'cloud-runs.json',state)
         with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
              patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
@@ -296,8 +289,10 @@ class FullContextRefreshTests(unittest.TestCase):
         saved=app.load(app.DATA/'cloud-runs.json')['2026-11-10']
         self.assertEqual(saved['analyzed_context'],old_hash)
         self.assertEqual(saved['analysis_versions'],[old_hash])
+        self.assertEqual(saved['sleep_identity_version'],2)
+        self.assertEqual(saved['analyzed_sleep'],cloud.sleep_candidate(report,self.now))
 
-    def test_context_change_resets_stability_instead_of_chasing_live_updates(self):
+    def test_daytime_summary_changes_never_create_a_sleep_revision(self):
         report,_=self.setup_report({'readiness_contributors':{'recovery_index':40}})
         with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
              patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
@@ -305,5 +300,5 @@ class FullContextRefreshTests(unittest.TestCase):
             self.assertFalse(cloud.run_due(app,self.now))
             report['recovery']['readiness_contributors']['recovery_index']=41
             self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
-            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
-            run.assert_called_once()
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
+            run.assert_not_called()

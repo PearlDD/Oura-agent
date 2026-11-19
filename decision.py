@@ -60,7 +60,12 @@ def legacy_fingerprint(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
-def fingerprint(value):
+NIGHT_FIELDS = ('sleep_status', 'sleep_hours', 'bedtime_start', 'bedtime_end',
+                'hrv', 'rhr', 'average_heart_rate', 'respiratory_rate', 'sleep_efficiency',
+                'partial_sleep_hours')
+
+
+def previous_fingerprint(value):
     # Oura activity for the report day is a live counter, not a completed day.
     # Keep the snapshot available as evidence, but don't invalidate a morning
     # decision whenever steps/sedentary minutes tick. Completed days stay relevant.
@@ -73,15 +78,28 @@ def fingerprint(value):
     return legacy_fingerprint(stable)
 
 
+def fingerprint(value):
+    # Daily scores/contributors may be recomputed after a nap. Keep them in
+    # the original analysis input, but only main-sleep measurements invalidate
+    # today's morning snapshot. Other dates and actual training/feedback stay relevant.
+    stable = copy.deepcopy(value)
+    if isinstance(stable, dict) and stable.get('date'):
+        def night(row):return {k:v for k,v in row.items() if k in NIGHT_FIELDS or k=='date'}
+        stable['recovery'] = night(stable.get('recovery', {}))
+        stable['recovery_history'] = [night(row) if row.get('date')==stable['date'] else row
+                                      for row in stable.get('recovery_history', [])]
+    return legacy_fingerprint(stable)
+
+
 def compatible_hash(stored, current, snapshot):
     current_hash = fingerprint(current)
     if stored == current_hash:
         return stored
     previous = snapshot.get('context')
-    # Only recognize a legacy report if the exact original context was preserved
-    # and its only meaningful difference is today's live activity counters.
+    # Migrate only with a hash-verified original context whose main-night and
+    # non-daytime inputs still match. Never re-label a genuinely changed night.
     if (isinstance(previous, dict) and snapshot.get('data_hash') == stored
-            and legacy_fingerprint(previous) == stored
+            and stored in (legacy_fingerprint(previous), previous_fingerprint(previous))
             and fingerprint(previous) == current_hash):
         return current_hash
     return stored

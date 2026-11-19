@@ -51,7 +51,7 @@ def view(app):
         record = app.report(now.date().isoformat()).get('decision') or {}
         if record.get('stale'):
             reason = (daily.get('reason') if daily.get('update_available') else
-                      '分析依据已有变化；自动晨报会在下一轮检查资料稳定后更新，旧建议暂不适用。'
+                      '分析依据已有变化；自动更新只跟随主睡眠，其他改动可手动重新分析，旧建议暂不适用。'
                       if os.environ.get('IRON_SCHEDULE_MODE') == 'wake' and os.environ.get('IRON_SCHEDULE_ENABLED') == '1'
                       else '分析所依据的数据或计划已有变化，旧建议暂不适用，请重新分析。')
             daily.update(status='analysis_outdated', reason=reason)
@@ -148,6 +148,7 @@ def _run_daily(app, now, enforce_hour=True):
             state[d] = {**state.get(d, {}), 'status': status, 'reason': reason,
                         'notification': notification, 'analyzed_sleep': analyzed_sleep,
                         'analyzed_sleep_end': analyzed_sleep_end,
+                        'sleep_identity_version': 2,
                         'analyzed_context': analyzed_context,
                         'analysis_versions': list(dict.fromkeys(state.get(d, {}).get('analysis_versions', []) + ([analyzed_context] if analyzed_context else []))),
                         'sleep_versions': list(dict.fromkeys(state.get(d, {}).get('sleep_versions', []) + ([analyzed_sleep] if analyzed_sleep else []))),
@@ -215,6 +216,7 @@ def reconcile(app, now):
                         'failure_stage': None, 'notification': notification,
                         'analyzed_sleep': sleep_candidate(report, now),
                         'analyzed_sleep_end': report.get('recovery', {}).get('bedtime_end'),
+                        'sleep_identity_version': 2,
                         'sleep_versions': list(dict.fromkeys(previous.get('sleep_versions', []) + [sleep_candidate(report, now)])),
                         'finished_at': dt.datetime.now(app.TZ).isoformat()}
             app.save(app.DATA / 'cloud-runs.json', state)
@@ -244,8 +246,8 @@ def sleep_candidate(report, now):
         return None
     import hashlib
     import json
-    keys = ('sleep_hours', 'bedtime_start', 'bedtime_end', 'sleep_score', 'readiness',
-            'hrv', 'rhr', 'temperature_deviation', 'respiratory_rate')
+    import decision
+    keys = decision.NIGHT_FIELDS
     return hashlib.sha256(json.dumps({key: r.get(key) for key in keys}, sort_keys=True).encode()).hexdigest()
 
 
@@ -303,6 +305,15 @@ def run_wake_due(app, now):
             if existing.get('status') not in TERMINAL:
                 state[d] = {**existing, 'status': 'waiting_for_sleep', 'reason': message}
             elif existing.get('status') in ('complete', 'failed', 'incomplete'):
+                # A verified fresh decision proves the main-sleep basis unchanged;
+                # register the narrower identity without another model request.
+                if (existing.get('sleep_identity_version') != 2 and candidate
+                        and record.get('data_hash') and not record.get('stale')):
+                    existing = {**existing, 'sleep_identity_version': 2,
+                                'original_analyzed_sleep': existing.get('analyzed_sleep'),
+                                'analyzed_sleep': candidate,
+                                'sleep_versions': list(dict.fromkeys(existing.get('sleep_versions', []) + [candidate]))}
+                    state[d] = existing
                 if (context_candidate and not record.get('stale')
                         and context_candidate == record.get('data_hash')):
                     existing = {**existing, 'analyzed_context': context_candidate,
@@ -323,25 +334,9 @@ def run_wake_due(app, now):
                     state[d] = {**existing, 'analyzed_sleep': analyzed}
                 elif candidate == analyzed and not existing.get('analyzed_sleep_end'):
                     state[d] = {**existing, 'analyzed_sleep_end': report.get('recovery', {}).get('bedtime_end')}
-                # The stale check uses the complete analysis context, not only the
-                # short sleep identity. Follow that exact same fingerprint here.
-                # A stable new context is attempted once; failures/reversions never
-                # trigger an unbounded retry of an already attempted paid request.
-                if (existing.get('status') in ('complete', 'failed', 'incomplete')
-                        and context_candidate and record.get('stale')):
-                    processed = existing.get('analysis_versions', []) + [existing.get('analyzed_context'), record.get('data_hash')]
-                    seen = context_candidate in processed
-                    if (existing.get('status') in ('failed', 'incomplete')
-                            and not existing.get('analyzed_context') and candidate == analyzed):
-                        seen = True  # Pre-upgrade failures have no full-context audit.
-                    context_ready = stamp - context_first_seen >= stable
-                    state[d] = {**existing, 'update_available': True,
-                                'reason': ('此分析数据版本已处理；可在面板手动重试。' if seen else
-                                           '训练、计划或恢复依据已有变化，等待稳定后自动更新分析。')}
-                    if ready and context_ready and not seen:
-                        state[d] = {**state[d], 'status': 'waiting_for_sleep',
-                                    'sleep_refreshes': existing.get('sleep_refreshes', 0) + 1,
-                                    'update_available': False}
+                # Automatic generation follows only a new stable main-sleep version.
+                # Plan, feedback and training changes remain visible as stale context,
+                # but require a deliberate manual analysis rather than a daytime run.
             app.save(app.DATA / 'cloud-runs.json', state)
             app.JOB['message'] = message
     except Exception:

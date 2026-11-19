@@ -94,6 +94,21 @@ class AppTests(unittest.TestCase):
         self.assertEqual(r['sleep_hours'],1)
         self.assertEqual(r['hrv'],40)
 
+    def test_twenty_minute_nap_does_not_replace_main_night_or_change_its_identity(self):
+        import cloud
+        now=dt.datetime(2026,11,6,15,tzinfo=app.TZ)
+        night={'day':'2026-11-06','type':'long_sleep','total_sleep_duration':28800,
+               'bedtime_start':'2026-11-06T01:00:00-05:00','bedtime_end':'2026-11-06T09:00:00-05:00','average_hrv':50}
+        app.save(app.DATA/'oura/sleep.json',{'data':[night]})
+        app.save(app.DATA/'oura/daily_sleep.json',{'data':[{'day':'2026-11-06','score':80}]})
+        app.save(app.DATA/'oura/daily_readiness.json',{'data':[{'day':'2026-11-06','score':75}]})
+        before=app.recovery_data()['2026-11-06'];identity=cloud.sleep_candidate({'recovery':before},now)
+        app.save(app.DATA/'oura/sleep.json',{'data':[night,{'day':'2026-11-06','type':'rest','total_sleep_duration':1200,'average_hrv':20}]})
+        app.save(app.DATA/'oura/daily_sleep.json',{'data':[{'day':'2026-11-06','score':90}]})
+        after=app.recovery_data()['2026-11-06']
+        self.assertEqual(after['sleep_hours'],8);self.assertEqual(after['hrv'],50)
+        self.assertEqual(cloud.sleep_candidate({'recovery':after},now),identity)
+
     def test_fragment_then_complete_record_updates_without_stale_values(self):
         p=app.DATA/'oura/sleep.json'
         app.save(p,{'data':[{'day':'2026-11-06','type':'sleep','total_sleep_duration':3810}]})
