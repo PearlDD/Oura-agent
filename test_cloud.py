@@ -71,11 +71,12 @@ class WakeTests(unittest.TestCase):
         self.job=patch.object(app,'JOB',{'running':False,'errors':[]});self.job.start()
         self.env=patch.dict('os.environ',{'IRON_SCHEDULE_MODE':'wake','IRON_WAKE_POLL_SECONDS':'900','IRON_WAKE_STABLE_SECONDS':'900'});self.env.start()
         self.now=dt.datetime(2026,11,10,10,0,tzinfo=app.TZ)
+        self.context=patch.object(app,'analysis_context',side_effect=lambda d,r=None:{'date':d,'recovery':(r or {}).get('recovery',{}),'plans':(r or {}).get('plans',{})});self.context.start()
         self.recovery={'sleep_status':'main_record','sleep_hours':8,'sleep_score':80,'readiness':75,
                        'bedtime_start':'2026-11-10T01:00:00-05:00','bedtime_end':'2026-11-10T09:00:00-05:00'}
 
     def tearDown(self):
-        self.env.stop();self.job.stop();self.data.stop();self.tmp.cleanup()
+        self.context.stop();self.env.stop();self.job.stop();self.data.stop();self.tmp.cleanup()
 
     def test_stable_main_sleep_triggers_before_old_eleven_o_clock(self):
         with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
@@ -228,3 +229,81 @@ class ReliabilityTests(unittest.TestCase):
         with patch.object(app,'report',return_value={'decision':{'stale':True}}):
             self.assertEqual(cloud.view(app)['today']['status'],'analysis_outdated')
         self.assertEqual(app.load(app.DATA/'cloud-runs.json')[today]['status'],'complete')
+
+class FullContextRefreshTests(unittest.TestCase):
+    setUp = WakeTests.setUp
+    tearDown = WakeTests.tearDown
+    def setup_report(self, change):
+        original=dict(self.recovery)
+        old_context={'date':'2026-11-10','recovery':original,'plans':{}}
+        old_hash=app.decision.fingerprint(old_context)
+        report={'recovery':{**original,**change},'decision':{'data_hash':old_hash,'stale':True}}
+        app.save(app.DATA/'cloud-runs.json',{'2026-11-10':{
+            'status':'complete','analyzed_sleep':cloud.sleep_candidate({'recovery':original},self.now),
+            'analyzed_context':old_hash,'analysis_versions':[old_hash]}})
+        return report,old_hash
+
+    def test_non_sleep_identity_recovery_change_is_refreshed_after_stability(self):
+        report,old_hash=self.setup_report({'readiness_contributors':{'recovery_index':40}})
+        original=cloud.sleep_candidate({'recovery':self.recovery},self.now)
+        self.assertEqual(cloud.sleep_candidate(report,self.now),original)
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
+             patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily',return_value=True) as run:
+            self.assertFalse(cloud.run_due(app,self.now))
+            self.assertTrue(app.load(app.DATA/'cloud-runs.json')['2026-11-10']['update_available'])
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            run.assert_called_once()
+            current=app.decision.fingerprint(app.analysis_context('2026-11-10',report))
+            state=app.load(app.DATA/'cloud-runs.json')
+            state['2026-11-10'].update(status='failed',analyzed_context=current,analysis_versions=[old_hash,current])
+            app.save(app.DATA/'cloud-runs.json',state)
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
+            self.assertEqual(run.call_count,1)
+
+    def test_plan_change_uses_same_full_context_as_stale_check(self):
+        report,_=self.setup_report({})
+        report['plans']={'2026-11-10':{'kind':'rest','version':2}}
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
+             patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily',return_value=True) as run:
+            self.assertFalse(cloud.run_due(app,self.now))
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            run.assert_called_once()
+
+    def test_activity_counters_do_not_trigger_another_paid_analysis(self):
+        report,old_hash=self.setup_report({'activity':{'steps':99}})
+        self.assertEqual(old_hash,app.decision.fingerprint(app.analysis_context('2026-11-10',report)))
+        report['decision']['stale']=False
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
+             patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily') as run:
+            cloud.run_due(app,self.now);report['recovery']['activity']['steps']=199
+            cloud.run_due(app,self.now+dt.timedelta(minutes=15));run.assert_not_called()
+        saved=app.load(app.DATA/'cloud-runs.json')['2026-11-10']
+        self.assertIn(old_hash,saved['analysis_versions'])
+
+    def test_existing_fresh_report_registers_version_without_request(self):
+        report,old_hash=self.setup_report({})
+        report['decision']['stale']=False
+        state=app.load(app.DATA/'cloud-runs.json')
+        state['2026-11-10'].pop('analyzed_context');state['2026-11-10'].pop('analysis_versions')
+        app.save(app.DATA/'cloud-runs.json',state)
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
+             patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily') as run:
+            self.assertFalse(cloud.run_due(app,self.now));run.assert_not_called()
+        saved=app.load(app.DATA/'cloud-runs.json')['2026-11-10']
+        self.assertEqual(saved['analyzed_context'],old_hash)
+        self.assertEqual(saved['analysis_versions'],[old_hash])
+
+    def test_context_change_resets_stability_instead_of_chasing_live_updates(self):
+        report,_=self.setup_report({'readiness_contributors':{'recovery_index':40}})
+        with patch.object(app,'settings',return_value={'oura_tokens':{'configured':True}}), \
+             patch.object(app,'recovery_data',return_value={}),patch.object(app,'fetch_oura'), \
+             patch.object(app,'report',return_value=report),patch.object(cloud,'_run_daily',return_value=True) as run:
+            self.assertFalse(cloud.run_due(app,self.now))
+            report['recovery']['readiness_contributors']['recovery_index']=41
+            self.assertFalse(cloud.run_due(app,self.now+dt.timedelta(minutes=15)))
+            self.assertTrue(cloud.run_due(app,self.now+dt.timedelta(minutes=30)))
+            run.assert_called_once()

@@ -50,7 +50,11 @@ def view(app):
     if daily.get('status') == 'complete':
         record = app.report(now.date().isoformat()).get('decision') or {}
         if record.get('stale'):
-            daily.update(status='analysis_outdated', reason='任务曾完成，但分析所依据的数据或计划已有变化；旧建议暂不适用，请重新分析。')
+            reason = (daily.get('reason') if daily.get('update_available') else
+                      '分析依据已有变化；自动晨报会在下一轮检查资料稳定后更新，旧建议暂不适用。'
+                      if os.environ.get('IRON_SCHEDULE_MODE') == 'wake' and os.environ.get('IRON_SCHEDULE_ENABLED') == '1'
+                      else '分析所依据的数据或计划已有变化，旧建议暂不适用，请重新分析。')
+            daily.update(status='analysis_outdated', reason=reason)
     return {'enabled': os.environ.get('IRON_SCHEDULE_ENABLED') == '1',
             'mode': os.environ.get('IRON_SCHEDULE_MODE', 'fixed'),
             'ai_enabled': os.environ.get('IRON_SCHEDULE_AI') == '1',
@@ -82,6 +86,7 @@ def _run_daily(app, now, enforce_hour=True):
     phase = 'sync'
     analyzed_sleep = None
     analyzed_sleep_end = None
+    analyzed_context = None
     try:
         app.sync(7, claimed=True)
         report = app.report(d)
@@ -98,6 +103,7 @@ def _run_daily(app, now, enforce_hour=True):
             if os.environ.get('IRON_SCHEDULE_AI_PROVIDER') != configured['provider']:
                 status, reason = 'incomplete', '定时 AI 提供商未确认；未发送数据。'
             else:
+                analyzed_context = app.decision.fingerprint(app.analysis_context(d, report))
                 record = report.get('decision') or {}
                 source = configured['label'] + ' / ' + configured['model']
                 reused = bool(record and not record.get('stale') and record.get('source') == source)
@@ -142,6 +148,8 @@ def _run_daily(app, now, enforce_hour=True):
             state[d] = {**state.get(d, {}), 'status': status, 'reason': reason,
                         'notification': notification, 'analyzed_sleep': analyzed_sleep,
                         'analyzed_sleep_end': analyzed_sleep_end,
+                        'analyzed_context': analyzed_context,
+                        'analysis_versions': list(dict.fromkeys(state.get(d, {}).get('analysis_versions', []) + ([analyzed_context] if analyzed_context else []))),
                         'sleep_versions': list(dict.fromkeys(state.get(d, {}).get('sleep_versions', []) + ([analyzed_sleep] if analyzed_sleep else []))),
                         'failure_stage': phase if status == 'failed' else None,
                         'finished_at': dt.datetime.now(app.TZ).isoformat()}
@@ -269,6 +277,12 @@ def run_wake_due(app, now):
                        (now.date() + dt.timedelta(days=1)).isoformat())
         report = app.report(d)
         candidate = sleep_candidate(report, now)
+        record = report.get('decision') or {}
+        context_candidate = (app.decision.fingerprint(app.analysis_context(d, report))
+                             if record.get('data_hash') else None)
+        context_first_seen = (previous.get('context_first_seen_at', stamp)
+                              if previous.get('date') == d and previous.get('context_candidate') == context_candidate
+                              else stamp)
         first_seen = stamp
         if candidate and candidate == previous.get('candidate') and previous.get('date') == d:
             first_seen = previous.get('first_seen_at', stamp)
@@ -281,12 +295,19 @@ def run_wake_due(app, now):
                    '等待今天已结束的主睡眠及睡眠/准备度数据；可先打开 Oura App 同步戒指。')
         with app.LOCK:
             app.save(path, {'date': d, 'checked_at': stamp, 'candidate': candidate,
-                            'first_seen_at': first_seen, 'message': message})
+                            'first_seen_at': first_seen, 'message': message,
+                            'context_candidate': context_candidate,
+                            'context_first_seen_at': context_first_seen})
             state = _load_state(app)
             existing = state.get(d, {})
             if existing.get('status') not in TERMINAL:
                 state[d] = {**existing, 'status': 'waiting_for_sleep', 'reason': message}
             elif existing.get('status') in ('complete', 'failed', 'incomplete'):
+                if (context_candidate and not record.get('stale')
+                        and context_candidate == record.get('data_hash')):
+                    existing = {**existing, 'analyzed_context': context_candidate,
+                                'analysis_versions': list(dict.fromkeys(existing.get('analysis_versions', []) + [context_candidate]))}
+                    state[d] = existing
                 analyzed = existing.get('analyzed_sleep') or (previous.get('candidate') if previous.get('date') == d else None)
                 if analyzed and candidate and candidate != analyzed:
                     processed = existing.get('sleep_versions', []) + [analyzed]
@@ -302,6 +323,25 @@ def run_wake_due(app, now):
                     state[d] = {**existing, 'analyzed_sleep': analyzed}
                 elif candidate == analyzed and not existing.get('analyzed_sleep_end'):
                     state[d] = {**existing, 'analyzed_sleep_end': report.get('recovery', {}).get('bedtime_end')}
+                # The stale check uses the complete analysis context, not only the
+                # short sleep identity. Follow that exact same fingerprint here.
+                # A stable new context is attempted once; failures/reversions never
+                # trigger an unbounded retry of an already attempted paid request.
+                if (existing.get('status') in ('complete', 'failed', 'incomplete')
+                        and context_candidate and record.get('stale')):
+                    processed = existing.get('analysis_versions', []) + [existing.get('analyzed_context'), record.get('data_hash')]
+                    seen = context_candidate in processed
+                    if (existing.get('status') in ('failed', 'incomplete')
+                            and not existing.get('analyzed_context') and candidate == analyzed):
+                        seen = True  # Pre-upgrade failures have no full-context audit.
+                    context_ready = stamp - context_first_seen >= stable
+                    state[d] = {**existing, 'update_available': True,
+                                'reason': ('此分析数据版本已处理；可在面板手动重试。' if seen else
+                                           '训练、计划或恢复依据已有变化，等待稳定后自动更新分析。')}
+                    if ready and context_ready and not seen:
+                        state[d] = {**state[d], 'status': 'waiting_for_sleep',
+                                    'sleep_refreshes': existing.get('sleep_refreshes', 0) + 1,
+                                    'update_available': False}
             app.save(app.DATA / 'cloud-runs.json', state)
             app.JOB['message'] = message
     except Exception:

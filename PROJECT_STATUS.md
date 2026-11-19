@@ -7,6 +7,13 @@ or an older checkout. Conversation history is not a substitute for repository st
 
 ## Current implementation
 
+- Automatic refresh now checks the same complete decision fingerprint used for
+  staleness, not just the short sleep snapshot. Stable new recovery contributors,
+  training/plan/feedback contexts can trigger a revision. `wake-poll.json` persists
+  full-context stability timestamps; `cloud-runs.json` stores attempted context hashes
+  to prevent rebilling failed or reverted versions. Ordinary activity counters remain
+  excluded. Pre-upgrade failures without a context audit still need explicit retry.
+
 - The homepage load chart shows all catalogued muscle groups, including chest,
   front delts and serratus, independent of planning priorities. Support/control
   involvement is shown separately and does not inflate strength bars. Zero display
