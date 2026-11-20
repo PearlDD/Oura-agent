@@ -78,7 +78,7 @@ def previous_fingerprint(value):
     return legacy_fingerprint(stable)
 
 
-def fingerprint(value):
+def previous_night_fingerprint(value):
     # Daily scores/contributors may be recomputed after a nap. Keep them in
     # the original analysis input, but only main-sleep measurements invalidate
     # today's morning snapshot. Other dates and actual training/feedback stay relevant.
@@ -91,6 +91,17 @@ def fingerprint(value):
     return legacy_fingerprint(stable)
 
 
+def fingerprint(value):
+    # Oura can revise YESTERDAY's activity after today's morning report too.
+    # Activity is a frozen analysis input at every date, not an invalidation
+    # trigger. Actual completed strength logs remain in training_history.
+    stable = copy.deepcopy(value)
+    if isinstance(stable, dict):
+        for row in stable.get('recovery_history', []):
+            row.pop('activity', None)
+    return previous_night_fingerprint(stable)
+
+
 def compatible_hash(stored, current, snapshot):
     current_hash = fingerprint(current)
     if stored == current_hash:
@@ -99,7 +110,7 @@ def compatible_hash(stored, current, snapshot):
     # Migrate only with a hash-verified original context whose main-night and
     # non-daytime inputs still match. Never re-label a genuinely changed night.
     if (isinstance(previous, dict) and snapshot.get('data_hash') == stored
-            and stored in (legacy_fingerprint(previous), previous_fingerprint(previous))
+            and stored in (legacy_fingerprint(previous), previous_fingerprint(previous), previous_night_fingerprint(previous))
             and fingerprint(previous) == current_hash):
         return current_hash
     return stored

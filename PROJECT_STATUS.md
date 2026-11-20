@@ -1,11 +1,17 @@
 # Current project status
 
-Technical handoff checkpoint: 2026-11-18 (America/New_York).
+Technical handoff checkpoint: 2026-11-20 (America/New_York).
 Read this file and README.md when continuing in a new chat. Fetch origin/main and
 compare the checkout before editing; a new chat may start from a different folder
 or an older checkout. Conversation history is not a substitute for repository state.
 
 ## Current implementation
+
+- Fingerprint v4 excludes Oura activity snapshots for EVERY historical date as well
+  as today. Oura can backfill yesterday's activity after the morning report; this
+  must not expire it. Actual strength training logs, feedback and plan changes
+  remain meaningful. V3 activity-only expiries migrate only after verifying the
+  exact original saved context hash; no new model call and no blind stale override.
 
 - User preference: automatic refresh follows the ended main NIGHT sleep only.
   Main-sleep duration/times/HRV/heart rate/breathing/efficiency corrections can trigger

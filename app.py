@@ -746,7 +746,7 @@ def current_decision(d, r=None):
             saved = load(DATA/'decisions'/(d+'.json'), {})
             if saved.get('data_hash') == original_hash:
                 record = {**saved, 'data_hash': compatible, 'original_data_hash': original_hash,
-                          'fingerprint_version': 3}
+                          'fingerprint_version': 4}
                 save(DATA/'decisions'/(d+'.json'), record)
     else:
         record['data_hash'] = compatible
@@ -759,7 +759,7 @@ def store_decision(d, value, expected_hash, source='Codex chat'):
         ctx=analysis_context(d)
         if decision.fingerprint(ctx)!=expected_hash:raise AppError('分析期间数据或计划已变化，请重新分析。')
         decision.validate(value,ctx)
-        record={'date':d,'analysis':value,'data_hash':expected_hash,'fingerprint_version':3,'source':source,'created_at':dt.datetime.now(TZ).isoformat(),'stale':False}
+        record={'date':d,'analysis':value,'data_hash':expected_hash,'fingerprint_version':4,'source':source,'created_at':dt.datetime.now(TZ).isoformat(),'stale':False}
         save(DATA/'decisions'/(d+'.json'),record)
         return record
 

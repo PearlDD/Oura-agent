@@ -76,11 +76,32 @@ class SnapshotFingerprintTests(unittest.TestCase):
         new['recovery']['sleep_hours']=9
         self.assertEqual(decision.compatible_hash(stored,new,{'data_hash':stored,'context':old}),stored)
 
-    def test_sleep_recovery_training_feedback_plan_and_completed_activity_still_invalidate(self):
+    def test_sleep_recovery_training_feedback_and_plan_still_invalidate(self):
         old=self.context()
-        for change in (lambda x:x['recovery'].update(sleep_hours=9),lambda x:x['recovery'].update(hrv=45),lambda x:x['plans'].update(version=2),lambda x:x['training_history'].append({'sets':3}),lambda x:x['checkin'].update(energy=2),lambda x:x['health_observations'].update(symptoms='changed'),lambda x:x['recovery_history'][0]['activity'].update(steps=9000)):
+        for change in (lambda x:x['recovery'].update(sleep_hours=9),lambda x:x['recovery'].update(hrv=45),lambda x:x['plans'].update(version=2),lambda x:x['training_history'].append({'sets':3}),lambda x:x['checkin'].update(energy=2),lambda x:x['health_observations'].update(symptoms='changed')):
             new=copy.deepcopy(old);change(new)
             self.assertNotEqual(decision.fingerprint(old),decision.fingerprint(new))
+
+    def test_late_prior_day_activity_corrections_never_invalidate_morning_snapshot(self):
+        old=self.context();new=copy.deepcopy(old)
+        for row in new['recovery_history']:
+            row['activity'].update(steps=9999,score=99,sedentary_time=12,low_activity_time=42,
+                                   medium_activity_time=8,contributors={'stay_active':99})
+        self.assertEqual(decision.fingerprint(old),decision.fingerprint(new))
+        self.assertEqual(old['recovery_history'][0]['activity']['steps'],8000)
+
+    def test_v3_activity_only_expiry_recovers_with_audit_without_model_call(self):
+        old=self.context();stored=decision.previous_night_fingerprint(old);new=copy.deepcopy(old)
+        new['recovery_history'][0]['activity'].update(steps=9000,sedentary_time=120)
+        with tempfile.TemporaryDirectory() as folder,patch.object(app,'DATA',Path(folder)),patch.object(app,'analysis_context',return_value=new),patch.object(app,'ai_report') as ai:
+            app.save(app.DATA/'decisions'/'2026-11-13.json',{'data_hash':stored,'analysis':sample(),'fingerprint_version':3})
+            app.save(app.DATA/'agent-context'/'2026-11-13.json',{'data_hash':stored,'context':old})
+            self.assertFalse(app.current_decision('2026-11-13')['stale'])
+            migrated=app.load(app.DATA/'decisions'/'2026-11-13.json')
+            self.assertEqual(migrated['fingerprint_version'],4)
+            self.assertEqual(migrated['original_data_hash'],stored)
+            new['recovery']['sleep_hours']=9
+            self.assertTrue(app.current_decision('2026-11-13')['stale']);ai.assert_not_called()
 
     def test_legacy_hash_is_compatible_only_with_verified_original_snapshot(self):
         old=self.context();stored=decision.legacy_fingerprint(old);snapshot={'data_hash':stored,'context':old}
